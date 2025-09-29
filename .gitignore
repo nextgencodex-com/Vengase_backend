@@ -102,6 +102,9 @@ pids/
 ehthumbs.db
 Thumbs.db
 
+# Firebase
+config/serviceAccountKey.json
+
 # Uploads
 public/uploads/*
 !public/uploads/.gitkeep
