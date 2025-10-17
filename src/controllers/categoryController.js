@@ -7,14 +7,14 @@ const logger = require('../utils/logger');
 const getCategories = async (req, res, next) => {
   try {
     const categories = [
-      'tops',
-      'bottoms', 
+      't-shirts-shirts',
+      'pants-shorts', 
       'jewelry',
       'accessories',
       'bags',
       'bottles',
       'caps',
-      'activewear',
+      'slides-socks',
       'unisex'
     ];
 

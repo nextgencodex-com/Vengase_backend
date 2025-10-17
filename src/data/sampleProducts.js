@@ -12,7 +12,7 @@ const products = [
     colors: ['Black', 'White', 'Gray'],
     rating: 4.5,
     reviews: 24,
-    category: 'tops',
+    category: 't-shirts-shirts',
     img: '/images/FeaturedProducts/prod1.png'
   },
   {
@@ -27,7 +27,7 @@ const products = [
     colors: ['Black', 'Navy', 'Red'],
     rating: 4.2,
     reviews: 18,
-    category: 'tops',
+    category: 't-shirts-shirts',
     img: '/images/FeaturedProducts/prod2.png'
   },
   {
@@ -42,7 +42,7 @@ const products = [
     colors: ['Black', 'Gray', 'Navy'],
     rating: 4.3,
     reviews: 22,
-    category: 'tops',
+    category: 't-shirts-shirts',
     img: '/images/FeaturedProducts/prod3.png'
   },
   {
@@ -57,7 +57,7 @@ const products = [
     colors: ['Black', 'Brown'],
     rating: 4.8,
     reviews: 35,
-    category: 'tops',
+    category: 't-shirts-shirts',
     img: '/images/FeaturedProducts/prod4.png'
   },
   {
@@ -72,7 +72,7 @@ const products = [
     colors: ['Gray', 'Navy', 'Burgundy'],
     rating: 4.2,
     reviews: 18,
-    category: 'tops',
+    category: 't-shirts-shirts',
     img: '/images/FeaturedProducts/prod5.png'
   },
   {
@@ -117,7 +117,7 @@ const products = [
     colors: ['Blue', 'Black', 'Gray'],
     rating: 4.4,
     reviews: 40,
-    category: 'bottoms',
+    category: 'pants-shorts',
     img: '/images/FeaturedProducts/prod8.png'
   },
   {
