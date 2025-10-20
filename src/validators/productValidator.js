@@ -5,8 +5,8 @@ const productSchema = Joi.object({
   price: Joi.number().required().min(0),
   description: Joi.string().required().min(3).max(500), // Reduced from 10 to 3
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().required().valid('tops', 'bottoms', 'jewelry', 'accessories', 'bags', 'bottles', 'caps', 'activewear', 'unisex'),
-  subcategory: Joi.string().optional().allow('').max(100), // Added subcategory
+  category: Joi.string().required().valid('unisex', 'accessories', 'jewelry'),
+  subcategory: Joi.string().optional().allow('').valid('t-shirts-shirts', 'pants-shorts', 'slides-socks', 'jackets-hoodies', 'bags', 'caps', 'bottles', 'bracelets', 'necklaces', 'rings'), // Added subcategory validation
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),
@@ -25,8 +25,8 @@ const productUpdateSchema = Joi.object({
   price: Joi.number().optional().min(0),
   description: Joi.string().optional().min(3).max(500), // Reduced from 10 to 3
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().optional().valid('tops', 'bottoms', 'jewelry', 'accessories', 'bags', 'bottles', 'caps', 'activewear', 'unisex'),
-  subcategory: Joi.string().optional().allow('').max(100), // Added subcategory
+  category: Joi.string().optional().valid('unisex', 'accessories', 'jewelry'),
+  subcategory: Joi.string().optional().allow('').valid('t-shirts-shirts', 'pants-shorts', 'slides-socks', 'jackets-hoodies', 'bags', 'caps', 'bottles', 'bracelets', 'necklaces', 'rings'), // Added subcategory validation
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),

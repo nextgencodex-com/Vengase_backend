@@ -9,12 +9,13 @@ const getCategories = async (req, res, next) => {
     const categories = [
       't-shirts-shirts',
       'pants-shorts', 
+      'slides-socks',
+      'jackets-hoodies',
       'jewelry',
       'accessories',
       'bags',
       'bottles',
       'caps',
-      'slides-socks',
       'unisex'
     ];
 
