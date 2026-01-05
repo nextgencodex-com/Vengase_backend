@@ -81,7 +81,8 @@ const createProduct = async (req, res, next) => {
         logger.info(`Image processed and saved for product: ${req.body.name}`);
       } catch (imageError) {
         logger.warn('Failed to save image, using fallback:', imageError.message);
-        imageUrl = '/images/placeholder.jpg'; // Fallback image
+        logger.error('Full image save error:', imageError);
+        imageUrl = '/images/prod1.png'; // Fallback to existing image
       }
     }
 

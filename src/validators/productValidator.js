@@ -3,18 +3,18 @@ const Joi = require('joi');
 const productSchema = Joi.object({
   name: Joi.string().required().min(1).max(255),
   price: Joi.number().required().min(0),
-  description: Joi.string().required().min(3).max(500), // Reduced from 10 to 3
+  description: Joi.string().required().min(3).max(500),
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().required().valid('unisex', 'accessories', 'jewelry'),
-  subcategory: Joi.string().optional().allow('').valid('t-shirts-shirts', 'pants-shorts', 'slides-socks', 'jackets-hoodies', 'bags', 'caps', 'bottles', 'bracelets', 'necklaces', 'rings'), // Added subcategory validation
+  category: Joi.string().required().min(1).max(100), // Accept any category (dynamic)
+  subcategory: Joi.string().optional().allow('').max(100), // Accept any subcategory (dynamic)
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),
   stock: Joi.object().pattern(
-    Joi.string().valid('S', 'M', 'L', 'XL', 'XXL'),
+    Joi.string(), // Accept any size
     Joi.number().integer().min(0)
   ).optional(),
-  img: Joi.string().optional().allow(''), // Allow any string including local paths
+  img: Joi.string().optional().allow(''),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued')
@@ -23,18 +23,18 @@ const productSchema = Joi.object({
 const productUpdateSchema = Joi.object({
   name: Joi.string().optional().min(1).max(255),
   price: Joi.number().optional().min(0),
-  description: Joi.string().optional().min(3).max(500), // Reduced from 10 to 3
+  description: Joi.string().optional().min(3).max(500),
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().optional().valid('unisex', 'accessories', 'jewelry'),
-  subcategory: Joi.string().optional().allow('').valid('t-shirts-shirts', 'pants-shorts', 'slides-socks', 'jackets-hoodies', 'bags', 'caps', 'bottles', 'bracelets', 'necklaces', 'rings'), // Added subcategory validation
+  category: Joi.string().optional().min(1).max(100), // Accept any category (dynamic)
+  subcategory: Joi.string().optional().allow('').max(100), // Accept any subcategory (dynamic)
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),
   stock: Joi.object().pattern(
-    Joi.string().valid('S', 'M', 'L', 'XL', 'XXL'),
+    Joi.string(), // Accept any size
     Joi.number().integer().min(0)
   ).optional(),
-  img: Joi.string().optional().allow(''), // Allow any string including local paths
+  img: Joi.string().optional().allow(''),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued')
@@ -42,7 +42,7 @@ const productUpdateSchema = Joi.object({
 
 const stockUpdateSchema = Joi.object({
   stock: Joi.object().pattern(
-    Joi.string().valid('S', 'M', 'L', 'XL', 'XXL'),
+    Joi.string(), // Accept any size
     Joi.number().integer().min(0)
   ).required()
 });

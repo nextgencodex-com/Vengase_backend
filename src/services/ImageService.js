@@ -24,9 +24,24 @@ class ImageService {
     try {
       await this.ensureImageDirectory();
 
+      // Validate input
+      if (!base64Data || typeof base64Data !== 'string') {
+        throw new Error('Invalid base64 data provided');
+      }
+
+      logger.info(`Attempting to save image. Data preview: ${base64Data.substring(0, 50)}...`);
+
       // Remove data URL prefix if present (data:image/jpeg;base64,...)
-      const base64String = base64Data.replace(/^data:image\/[a-z]+;base64,/, '');
+      let base64String = base64Data;
+      if (base64Data.includes('base64,')) {
+        base64String = base64Data.split('base64,')[1];
+      }
       
+      // Validate base64 string
+      if (!base64String || base64String.length < 100) {
+        throw new Error(`Invalid base64 string after processing. Length: ${base64String?.length || 0}`);
+      }
+
       // Generate unique filename
       const timestamp = Date.now();
       const random = crypto.randomBytes(4).toString('hex');
@@ -37,15 +52,25 @@ class ImageService {
       
       // Convert base64 to buffer and save
       const buffer = Buffer.from(base64String, 'base64');
+      
+      // Validate buffer
+      if (buffer.length < 100) {
+        throw new Error(`Buffer too small (${buffer.length} bytes). Image data may be corrupted.`);
+      }
+      
+      logger.info(`Saving image buffer of ${buffer.length} bytes to: ${filePath}`);
       await fs.writeFile(filePath, buffer);
       
-      logger.info(`Image saved: ${filename}`);
+      // Verify file was created
+      const stats = await fs.stat(filePath);
+      logger.info(`Image saved successfully: ${filename} (${stats.size} bytes)`);
       
       // Return the URL path that the frontend can use
       return `${this.baseUrl}/${filename}`;
     } catch (error) {
       logger.error('Error saving base64 image:', error);
-      throw new Error('Failed to save image');
+      logger.error('Base64 data length:', base64Data?.length || 0);
+      throw new Error(`Failed to save image: ${error.message}`);
     }
   }
 
