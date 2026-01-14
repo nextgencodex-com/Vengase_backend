@@ -5,9 +5,9 @@ const logger = require('../utils/logger');
 
 class ImageService {
   constructor() {
-    // Path to the frontend's public/images directory
-    this.imageDir = path.join(__dirname, '../../../vengase-website/public/images');
-    this.baseUrl = '/images'; // URL path for accessing images
+    // Path to the backend's public/uploads directory for production
+    this.imageDir = path.join(__dirname, '../../public/uploads');
+    this.baseUrl = '/uploads'; // URL path for accessing images from backend
   }
 
   async ensureImageDirectory() {
@@ -146,7 +146,7 @@ class ImageService {
   }
 
   isValidImageUrl(url) {
-    return url && (url.startsWith('/images/') || url.startsWith('http'));
+    return url && (url.startsWith('/uploads/') || url.startsWith('/images/') || url.startsWith('http'));
   }
 
   isBase64Image(data) {
