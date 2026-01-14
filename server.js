@@ -65,9 +65,9 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Static files
+// Static files - serve uploaded images
 app.use('/uploads', express.static('public/uploads'));
-// Serve product images from frontend public directory
+// Backward compatibility: also serve old images from frontend directory
 app.use('/images', express.static('../vengase-website/public/images'));
 
 // Handle preflight requests for all routes
