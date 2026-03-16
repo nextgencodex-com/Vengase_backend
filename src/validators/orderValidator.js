@@ -5,13 +5,13 @@ const orderSchema = Joi.object({
   userName: Joi.string().required().min(2).max(100),
   phone: Joi.string().required().min(10).max(15),
   items: Joi.array().items(Joi.object({
-    productId: Joi.number().required(),
+    productId: Joi.any().required(),
     name: Joi.string().required(),
     price: Joi.number().required().min(0),
     quantity: Joi.number().required().min(1),
-    size: Joi.string().optional(),
-    color: Joi.string().optional(),
-    img: Joi.string().optional()
+    size: Joi.string().optional().allow(''),
+    color: Joi.string().optional().allow(''),
+    img: Joi.string().optional().allow('')
   })).min(1).required(),
   totalAmount: Joi.number().required().min(0),
   shippingAddress: Joi.object({

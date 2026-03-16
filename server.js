@@ -16,6 +16,7 @@ const orderRoutes = require('./src/routes/orderRoutes');
 const uploadRoutes = require('./src/routes/uploadRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const authRoutes = require('./src/routes/authRoutes');
+const paymentRoutes = require('./src/routes/paymentRoutes');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
@@ -96,6 +97,7 @@ app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/upload', uploadRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/payment', paymentRoutes);
 
 // Error handling middleware
 app.use(notFound);
