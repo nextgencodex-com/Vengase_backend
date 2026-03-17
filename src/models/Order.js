@@ -59,6 +59,7 @@ class Order {
         paymentStatus: 'pending', // pending, completed, failed
         orderStatus: 'pending', // pending, confirmed, processing, shipped, delivered, cancelled
         notes: orderData.notes || '',
+        paymentMeta: orderData.paymentMeta || null,
         createdAt: new Date(),
         updatedAt: new Date()
       };

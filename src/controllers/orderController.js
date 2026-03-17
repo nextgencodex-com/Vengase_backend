@@ -64,7 +64,7 @@ const getOrderById = async (req, res, next) => {
     }
 
     // Check if user is admin or order owner
-    if (!req.user?.isAdmin && req.user?.uid !== order.userId) {
+    if (!req.user?.isAdmin && !req.user?.admin && req.user?.uid !== order.userId) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to view this order'
