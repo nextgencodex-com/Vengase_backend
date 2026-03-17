@@ -5,19 +5,21 @@ const productSchema = Joi.object({
   price: Joi.number().required().min(0),
   description: Joi.string().required().min(3).max(500),
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().required().min(1).max(100), // Accept any category (dynamic)
-  subcategory: Joi.string().optional().allow('').max(100), // Accept any subcategory (dynamic)
+  category: Joi.string().required().min(1).max(100),
+  subcategory: Joi.string().optional().allow('').max(100),
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),
   stock: Joi.object().pattern(
-    Joi.string(), // Accept any size
+    Joi.string(),
     Joi.number().integer().min(0)
   ).optional(),
   img: Joi.string().optional().allow(''),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
-  status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued')
+  status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),
+  isNewArrival: Joi.boolean().optional(),
+  newArrivalAddedAt: Joi.string().optional().allow(null, '')
 });
 
 const productUpdateSchema = Joi.object({
@@ -25,19 +27,21 @@ const productUpdateSchema = Joi.object({
   price: Joi.number().optional().min(0),
   description: Joi.string().optional().min(3).max(500),
   detailedDescription: Joi.string().optional().allow('').max(2000),
-  category: Joi.string().optional().min(1).max(100), // Accept any category (dynamic)
-  subcategory: Joi.string().optional().allow('').max(100), // Accept any subcategory (dynamic)
+  category: Joi.string().optional().min(1).max(100),
+  subcategory: Joi.string().optional().allow('').max(100),
   fabric: Joi.string().optional().allow('').max(100),
   features: Joi.array().items(Joi.string().max(100)).optional(),
   colors: Joi.array().items(Joi.string().max(50)).optional(),
   stock: Joi.object().pattern(
-    Joi.string(), // Accept any size
+    Joi.string(),
     Joi.number().integer().min(0)
   ).optional(),
   img: Joi.string().optional().allow(''),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
-  status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued')
+  status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),
+  isNewArrival: Joi.boolean().optional(),
+  newArrivalAddedAt: Joi.string().optional().allow(null, '')
 });
 
 const stockUpdateSchema = Joi.object({

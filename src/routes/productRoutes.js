@@ -7,7 +7,8 @@ const {
   deleteProduct,
   searchProducts,
   updateProductStock,
-  getProductsByCategory
+  getProductsByCategory,
+  getNewArrivals
 } = require('../controllers/productController');
 
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
@@ -17,6 +18,7 @@ const router = express.Router();
 
 // Public routes
 router.get('/', getProducts);
+router.get('/new-arrivals', getNewArrivals);
 router.get('/search/:term', searchProducts);
 router.get('/category/:category', getProductsByCategory);
 router.get('/:id', getProduct);

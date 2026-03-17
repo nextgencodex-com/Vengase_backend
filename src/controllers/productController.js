@@ -86,6 +86,8 @@ const createProduct = async (req, res, next) => {
       }
     }
 
+    const isNewArrival = req.body.isNewArrival === true || req.body.isNewArrival === 'true';
+
     const productData = {
       name: req.body.name,
       price: parseFloat(req.body.price),
@@ -100,10 +102,17 @@ const createProduct = async (req, res, next) => {
       img: imageUrl,
       rating: req.body.rating || 0,
       reviews: req.body.reviews || 0,
-      status: req.body.status || 'instock'
+      status: req.body.status || 'instock',
+      isNewArrival: isNewArrival,
+      newArrivalAddedAt: isNewArrival ? new Date().toISOString() : null
     };
 
     const product = await Product.create(productData);
+
+    // Enforce max 4 new arrivals — remove oldest if exceeded
+    if (isNewArrival) {
+      await enforceNewArrivalLimit();
+    }
 
     res.status(201).json({
       success: true,
@@ -125,6 +134,17 @@ const updateProduct = async (req, res, next) => {
     // Parse price if provided
     if (updateData.price) {
       updateData.price = parseFloat(updateData.price);
+    }
+
+    // Handle isNewArrival flag
+    const isNewArrival = updateData.isNewArrival === true || updateData.isNewArrival === 'true';
+    if ('isNewArrival' in updateData) {
+      updateData.isNewArrival = isNewArrival;
+      if (isNewArrival) {
+        updateData.newArrivalAddedAt = new Date().toISOString();
+      } else {
+        updateData.newArrivalAddedAt = null;
+      }
     }
 
     // Handle image update
@@ -157,6 +177,11 @@ const updateProduct = async (req, res, next) => {
     }
 
     const product = await Product.update(req.params.id, updateData);
+
+    // Enforce max 4 new arrivals if this product was just marked
+    if (isNewArrival && 'isNewArrival' in req.body) {
+      await enforceNewArrivalLimit(req.params.id);
+    }
 
     res.status(200).json({
       success: true,
@@ -215,6 +240,49 @@ const deleteProduct = async (req, res, next) => {
       });
     }
     logger.error('Error in deleteProduct:', error);
+    next(error);
+  }
+};
+
+// Helper: keep only the 4 most recent new arrivals, un-mark older ones
+const enforceNewArrivalLimit = async (currentProductId = null) => {
+  try {
+    const allProducts = await Product.findAllSimple();
+    const newArrivals = allProducts
+      .filter(p => p.isNewArrival === true)
+      .sort((a, b) => new Date(b.newArrivalAddedAt) - new Date(a.newArrivalAddedAt));
+
+    if (newArrivals.length > 4) {
+      // Un-mark the oldest ones beyond the 4 limit
+      const toRemove = newArrivals.slice(4);
+      for (const p of toRemove) {
+        await Product.update(p.id, { isNewArrival: false, newArrivalAddedAt: null });
+        logger.info(`Removed product ${p.id} from New Arrivals (limit enforced)`);
+      }
+    }
+  } catch (err) {
+    logger.warn('enforceNewArrivalLimit error:', err.message);
+  }
+};
+
+// @desc    Get new arrival products (max 4)
+// @route   GET /api/v1/products/new-arrivals
+// @access  Public
+const getNewArrivals = async (req, res, next) => {
+  try {
+    const allProducts = await Product.findAllSimple();
+    const newArrivals = allProducts
+      .filter(p => p.isNewArrival === true)
+      .sort((a, b) => new Date(b.newArrivalAddedAt) - new Date(a.newArrivalAddedAt))
+      .slice(0, 4);
+
+    res.status(200).json({
+      success: true,
+      count: newArrivals.length,
+      data: newArrivals
+    });
+  } catch (error) {
+    logger.error('Error in getNewArrivals:', error);
     next(error);
   }
 };
@@ -304,5 +372,6 @@ module.exports = {
   deleteProduct,
   searchProducts,
   updateProductStock,
-  getProductsByCategory
+  getProductsByCategory,
+  getNewArrivals
 };
