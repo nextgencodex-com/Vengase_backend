@@ -24,6 +24,7 @@ jobs:
         run: |
           ssh -p ${{ secrets.CPANEL_PORT }} ${{ secrets.CPANEL_USER }}@${{ secrets.CPANEL_HOST }} << 'EOF'
             set -e
+            source /home/vengxfdq/nodevenv/api.vengase.com/20/bin/activate
             cd /home/vengxfdq/api.vengase.com
 
             git fetch origin
