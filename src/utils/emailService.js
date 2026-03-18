@@ -325,7 +325,10 @@ const sendOrderConfirmationEmails = async (orderId) => {
       }
     } catch (err) {
       console.error(`[EmailService] Error sending email to customer:`, err);
-      logger.error('Error sending customer email via EmailJS:', err);
+      logger.error(`Error sending customer email via EmailJS: ${err?.message || err}`);
+      if (err?.stack) {
+        logger.error(err.stack);
+      }
     }
 
     // Try sending to Admin via Resend
@@ -353,7 +356,10 @@ const sendOrderConfirmationEmails = async (orderId) => {
       logger.info(`Admin email message id: ${adminMessageId}`);
     } catch (err) {
       console.error(`[EmailService] Error sending email to admin:`, err);
-      logger.error('Error sending admin email via Resend:', err);
+      logger.error(`Error sending admin email via Resend: ${err?.message || err}`);
+      if (err?.stack) {
+        logger.error(err.stack);
+      }
     }
 
   } catch (error) {
