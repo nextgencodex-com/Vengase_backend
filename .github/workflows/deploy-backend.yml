@@ -1,0 +1,34 @@
+name: Deploy Backend to cPanel
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.CPANEL_SSH_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ secrets.CPANEL_PORT }} ${{ secrets.CPANEL_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy backend on server
+        run: |
+          ssh -p ${{ secrets.CPANEL_PORT }} ${{ secrets.CPANEL_USER }}@${{ secrets.CPANEL_HOST }} << 'EOF'
+            set -e
+            cd /home/vengxfdq/api.vengase.com
+
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+
+            npm ci --omit=dev || npm install --omit=dev
+          EOF
