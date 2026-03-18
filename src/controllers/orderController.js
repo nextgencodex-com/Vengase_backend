@@ -1,9 +1,13 @@
 const Order = require('../models/Order');
 const logger = require('../utils/logger');
+const { sendOrderConfirmationEmails } = require('../utils/emailService');
 
 // Create new order
 const createOrder = async (req, res, next) => {
   try {
+    const normalizedPaymentMethod = String(req.body.paymentMethod || '').trim().toLowerCase();
+    logger.info(`Create order request received. paymentMethod(raw='${req.body.paymentMethod || ''}', normalized='${normalizedPaymentMethod || ''}'), userEmail='${req.body.userEmail || ''}'`);
+
     const orderData = {
       userId: req.user?.uid || null, // From auth middleware (optional for guest checkout)
       userEmail: req.body.userEmail,
@@ -12,11 +16,23 @@ const createOrder = async (req, res, next) => {
       totalAmount: req.body.totalAmount,
       shippingAddress: req.body.shippingAddress,
       phone: req.body.phone,
-      paymentMethod: req.body.paymentMethod,
+      paymentMethod: normalizedPaymentMethod || req.body.paymentMethod,
       notes: req.body.notes
     };
 
     const order = await Order.create(orderData);
+
+    // If order is Cash on Delivery, send confirmation email immediately
+    if (normalizedPaymentMethod === 'cod' || normalizedPaymentMethod === 'cash_on_delivery') {
+      const codOrderId = order.orderId || order.id;
+      logger.info(`COD order detected. Triggering confirmation emails for order ${codOrderId}.`);
+      // Run email sending asynchronously so it doesn't block the response
+      sendOrderConfirmationEmails(codOrderId).catch(err => {
+        logger.error(`COD email send failed for order ${codOrderId}: ${err?.message || err}`);
+      });
+    } else {
+      logger.info(`Order ${order.orderId} created with payment method '${orderData.paymentMethod}'. Email will be sent after payment confirmation.`);
+    }
 
     res.status(201).json({
       success: true,
