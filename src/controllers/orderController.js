@@ -1,5 +1,6 @@
 const Order = require('../models/Order');
 const logger = require('../utils/logger');
+const { sendOrderConfirmationEmails } = require('../utils/emailService');
 
 // Create new order
 const createOrder = async (req, res, next) => {
@@ -17,6 +18,12 @@ const createOrder = async (req, res, next) => {
     };
 
     const order = await Order.create(orderData);
+
+    // If order is Cash on Delivery, send confirmation email immediately
+    if (orderData.paymentMethod && orderData.paymentMethod.toLowerCase() === 'cod') {
+      // Run email sending asynchronously so it doesn't block the response
+      sendOrderConfirmationEmails(order.orderId || order.id).catch(err => logger.error(err));
+    }
 
     res.status(201).json({
       success: true,

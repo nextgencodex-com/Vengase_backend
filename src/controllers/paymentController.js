@@ -1,12 +1,36 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const Order = require('../models/Order');
+const { sendOrderConfirmationEmails } = require('../utils/emailService');
+
+const normalizePemKey = (rawKey) => {
+    if (!rawKey) return null;
+
+    const keyWithNewlines = String(rawKey)
+        .replace(/\\n/g, '\n')
+        .replace(/\r/g, '')
+        .trim();
+
+    // Preserve header/footer, trim only inner lines to avoid accidental whitespace corruption.
+    return keyWithNewlines
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n');
+};
+
+const getWebxpayPadding = () => {
+    const mode = String(process.env.WEBXPAY_ENCRYPTION_PADDING || 'pkcs1').toLowerCase();
+    if (mode === 'oaep') {
+        return crypto.constants.RSA_PKCS1_OAEP_PADDING;
+    }
+    return crypto.constants.RSA_PKCS1_PADDING;
+};
 
 // All secrets MUST be set in .env — no hardcoded fallbacks
 const WEBXPAY_SECRET_KEY = process.env.WEBXPAY_SECRET_KEY;
-const WEBXPAY_PUBLIC_KEY = process.env.WEBXPAY_PUBLIC_KEY
-  ? process.env.WEBXPAY_PUBLIC_KEY.replace(/\\n/g, '\n')
-  : null;
+const WEBXPAY_PUBLIC_KEY = normalizePemKey(process.env.WEBXPAY_PUBLIC_KEY);
+const WEBXPAY_CHECKOUT_URL = process.env.WEBXPAY_CHECKOUT_URL || 'https://webxpay.com/index.php?route=checkout/billing';
+const WEBXPAY_ENCRYPTION_PADDING = getWebxpayPadding();
 
 const PAYZY_SECRET_KEY = process.env.PAYZY_SECRET_KEY || 'dummy_secret';
 const PAYZY_SHOP_ID = process.env.PAYZY_SHOP_ID || 'dummy_shop_id';
@@ -18,6 +42,17 @@ if (!WEBXPAY_SECRET_KEY) {
 if (!WEBXPAY_PUBLIC_KEY) {
   logger.warn('WEBXPAY_PUBLIC_KEY is not set — callback RSA decryption will be skipped.');
 }
+if (WEBXPAY_PUBLIC_KEY) {
+    try {
+        const keyObj = crypto.createPublicKey(WEBXPAY_PUBLIC_KEY);
+        const normalizedPem = keyObj.export({ type: 'spki', format: 'pem' }).toString();
+        const fingerprint = crypto.createHash('sha256').update(normalizedPem).digest('hex').slice(0, 16);
+        const paddingName = WEBXPAY_ENCRYPTION_PADDING === crypto.constants.RSA_PKCS1_OAEP_PADDING ? 'OAEP' : 'PKCS1';
+        logger.info(`[WebXPay] Public key loaded (fingerprint: ${fingerprint}, padding: ${paddingName})`);
+    } catch (e) {
+        logger.error(`[WebXPay] Invalid public key format: ${e.message}`);
+    }
+}
 if (!process.env.PAYZY_SECRET_KEY) {
   logger.warn('PAYZY_SECRET_KEY is not set in environment variables! Using dummy key.');
 }
@@ -26,14 +61,38 @@ exports.generatePaymentPayload = async (req, res, next) => {
     try {
         const { orderId, amount, customerDetails } = req.body;
 
+        const clean = (value, fallback = '') => String(value ?? fallback).trim();
+        const cleanPhone = (value) => clean(value).replace(/[^0-9]/g, '');
+        const cleanPostal = (value) => clean(value).replace(/[^0-9A-Za-z]/g, '');
+
+        if (!WEBXPAY_SECRET_KEY || !WEBXPAY_PUBLIC_KEY) {
+            logger.error('WebXPay config missing. secret/public key must be configured.');
+            return res.status(500).json({
+                success: false,
+                error: 'WebXPay is not configured. Please contact support.'
+            });
+        }
+
+        const normalizedOrderId = String(orderId || '').trim();
+        const normalizedAmount = Number(amount);
+
+        if (!normalizedOrderId) {
+            return res.status(400).json({ success: false, error: 'Invalid orderId for payment.' });
+        }
+        if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+            return res.status(400).json({ success: false, error: 'Invalid amount for payment.' });
+        }
+
+        const amountForGateway = normalizedAmount.toFixed(2);
+
         // The format should be: unique_order_id|total_amount (Eg : 12001|2567.50)
-        const paymentString = `${orderId}|${amount}`;
+        const paymentString = `${normalizedOrderId}|${amountForGateway}`;
 
         // Encrypt using RSA public key and encode in Base64
         const buffer = Buffer.from(paymentString, 'utf8');
         const encrypted = crypto.publicEncrypt({
             key: WEBXPAY_PUBLIC_KEY,
-            padding: crypto.constants.RSA_PKCS1_PADDING
+            padding: WEBXPAY_ENCRYPTION_PADDING
         }, buffer);
         const paymentData = encrypted.toString('base64');
 
@@ -41,26 +100,28 @@ exports.generatePaymentPayload = async (req, res, next) => {
         const customFields = Buffer.from('').toString('base64'); 
 
         const payload = {
-            first_name: customerDetails.firstName || 'Customer',
-            last_name: customerDetails.lastName || 'Name',
-            email: customerDetails.email || 'customer@example.com',
-            contact_number: customerDetails.contact || '000000000',
-            address_line_one: customerDetails.address || 'Address',
-            city: customerDetails.city || 'City',
-            state: customerDetails.state || 'State',
-            postal_code: customerDetails.postalCode || '00000',
-            country: customerDetails.country || 'Sri Lanka',
+            first_name: clean(customerDetails?.firstName, 'Customer'),
+            last_name: clean(customerDetails?.lastName, 'Name'),
+            email: clean(customerDetails?.email, 'customer@example.com'),
+            contact_number: cleanPhone(customerDetails?.contact) || '000000000',
+            address_line_one: clean(customerDetails?.address, 'Address'),
+            city: clean(customerDetails?.city, 'City'),
+            state: clean(customerDetails?.state, 'State'),
+            postal_code: cleanPostal(customerDetails?.postalCode) || '00000',
+            country: clean(customerDetails?.country, 'Sri Lanka'),
             process_currency: 'LKR', // Or USD depending on your stores
-            cms: 'React',
+            cms: 'PHP',
             payment: paymentData,
-            secret_key: WEBXPAY_SECRET_KEY,
+            secret_key: String(WEBXPAY_SECRET_KEY).trim(),
             custom_fields: customFields
         };
+
+        logger.info(`[WebXPay] Payload generated for order ${normalizedOrderId}, amount ${amountForGateway}, url: ${WEBXPAY_CHECKOUT_URL}`);
 
         res.status(200).json({
             success: true,
             payload: payload,
-            url: 'https://webxpay.com/index.php?route=checkout/billing' // LIVE URL
+            url: WEBXPAY_CHECKOUT_URL
         });
     } catch (error) {
         logger.error('Error generating payment payload:', error);
@@ -148,6 +209,9 @@ exports.paymentCallback = async (req, res, next) => {
                 await Order.updatePaymentStatus(orderId, 'paid');
                 await Order.updateOrderStatus(orderId, 'confirmed');
                 logger.info(`Order ${orderId} payment marked as PAID and CONFIRMED`);
+                
+                // Send confirmation email asynchronously
+                sendOrderConfirmationEmails(orderId).catch(err => logger.error(err));
             } else {
                 await Order.updatePaymentStatus(orderId, 'failed');
                 logger.info(`Order ${orderId} payment marked as FAILED (statusCode=${statusCode})`);
@@ -242,11 +306,14 @@ exports.generatePayzyPayload = async (req, res, next) => {
             x_ship_to_zip, x_freight, x_platform, x_version
         };
 
-        // Save paymentMeta to the Order via Mongoose-equivalent update if needed
-        // Assuming Order update function allows partial update or direct DB call:
-        const { getFirestore } = require('../../config/firebase');
-        const db = getFirestore();
-        await db.collection('orders').doc(orderId).update({ paymentMeta });
+        // Save payment metadata for later verification; if this fails, continue checkout generation.
+        try {
+            const { getFirestore } = require('../../config/firebase');
+            const db = getFirestore();
+            await db.collection('orders').doc(orderId).update({ paymentMeta });
+        } catch (metaErr) {
+            logger.warn(`Could not persist Payzy paymentMeta for order ${orderId}: ${metaErr.message}`);
+        }
 
         // Build Payload
         const payload = {
@@ -256,19 +323,44 @@ exports.generatePayzyPayload = async (req, res, next) => {
         };
 
         const axios = require('axios');
-        const response = await axios.post("https://api.payzy.lk/checkout/custom-checkout", payload);
+        const response = await axios.post("https://api.payzy.lk/checkout/custom-checkout", payload, {
+            timeout: 20000,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
 
-        if (response.data && response.data.data && response.data.data.url) {
+        const payzyUrl =
+            response?.data?.url ||
+            response?.data?.data?.url ||
+            response?.data?.checkout_url ||
+            response?.data?.redirect_url;
+
+        if (payzyUrl) {
             res.status(200).json({
                 success: true,
-                url: response.data.data.url
+                url: payzyUrl
             });
         } else {
+            logger.error('Unexpected Payzy response shape:', response.data);
             throw new Error('Invalid response from Payzy API');
         }
     } catch (error) {
-        logger.error('Error in generatePayzyPayload:', error);
-        res.status(500).json({ success: false, error: 'Payzy payment setup failed' });
+        const upstreamMessage =
+            error?.response?.data?.message ||
+            error?.response?.data?.error ||
+            error?.response?.data?.detail ||
+            error?.message ||
+            'Payzy payment setup failed';
+
+        logger.error('Error in generatePayzyPayload:', {
+            message: error?.message,
+            code: error?.code,
+            status: error?.response?.status,
+            data: error?.response?.data
+        });
+
+        res.status(500).json({ success: false, error: upstreamMessage });
     }
 };
 
@@ -334,6 +426,10 @@ exports.verifyPayzyPayment = async (req, res, next) => {
                 await Order.updatePaymentStatus(x_order_id, 'paid');
                 await Order.updateOrderStatus(x_order_id, 'confirmed');
                 logger.info(`Payzy Order ${x_order_id} payment marked as PAID and CONFIRMED`);
+                
+                // Send confirmation email asynchronously
+                sendOrderConfirmationEmails(x_order_id).catch(err => logger.error(err));
+                
                 return res.status(200).json({ success: true, payment_status: 'paid' });
             } else {
                 await Order.updatePaymentStatus(x_order_id, 'failed');

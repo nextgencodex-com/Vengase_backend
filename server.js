@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 
 // Import configurations
 const { initializeFirebase } = require('./config/firebase');
@@ -67,9 +68,10 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Static files - serve uploaded images
-app.use('/uploads', express.static('public/uploads'));
-// Backward compatibility: also serve old images from frontend directory
-app.use('/images', express.static('../vengase-website/public/images'));
+app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+// Prefer backend-managed images (includes email logo), fallback to frontend images for compatibility.
+app.use('/images', express.static(path.join(__dirname, 'public/images')));
+app.use('/images', express.static(path.join(__dirname, '../vengase-website/public/images')));
 
 // Handle preflight requests for all routes
 app.options('*', (req, res) => {
