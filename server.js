@@ -42,26 +42,38 @@ app.use(helmet());
 if (process.env.NODE_ENV === 'production') {
   app.use(limiter);
 }
-// CORS configuration - Permissive for development
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'https://vengase.com',
+  'https://www.vengase.com'
+];
+
+const corsAllowlist = Array.from(new Set([...defaultOrigins, ...allowedOrigins]));
+
 app.use(cors({
-  origin: true, // Allow all origins
+  origin: (origin, callback) => {
+    // Allow server-to-server requests (no Origin header) and allowlisted browsers.
+    if (!origin || corsAllowlist.includes(origin)) {
+      return callback(null, true);
+    }
+
+    logger.warn(`CORS blocked origin: ${origin}`);
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   optionsSuccessStatus: 200
 }));
 
-// Add explicit CORS headers to all responses as fallback
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  // Log requests for debugging
-  logger.debug(`${req.method} ${req.path} - Origin: ${req.headers.origin || 'none'}`);
-  next();
-});
+// Handle CORS preflight across all routes.
+app.options('*', cors());
 
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 app.use(express.json({ limit: '10mb' }));
@@ -72,15 +84,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 // Prefer backend-managed images (includes email logo), fallback to frontend images for compatibility.
 app.use('/images', express.static(path.join(__dirname, 'public/images')));
 app.use('/images', express.static(path.join(__dirname, '../vengase-website/public/images')));
-
-// Handle preflight requests for all routes
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS,PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(200);
-});
 
 // Health check
 app.get('/health', (req, res) => {
