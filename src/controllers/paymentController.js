@@ -234,12 +234,32 @@ exports.paymentCallback = async (req, res, next) => {
 exports.generatePayzyPayload = async (req, res, next) => {
     try {
         const { orderId, amount, customerDetails } = req.body;
+
+        if (!orderId) {
+            return res.status(400).json({ success: false, error: 'Missing orderId' });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found' });
+        }
         
         const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
         
         const x_test_mode = PAYZY_TEST_MODE;
         const x_shopid = PAYZY_SHOP_ID;
-        const x_amount = parseFloat(amount).toFixed(2);
+        const orderTotal = Number(order.totalAmount);
+        const requestedAmount = Number(amount);
+        const effectiveAmount = Number.isFinite(orderTotal) && orderTotal > 0
+            ? orderTotal
+            : requestedAmount;
+
+        if (!Number.isFinite(effectiveAmount) || effectiveAmount <= 0) {
+            logger.warn(`Payzy payload rejected for order ${orderId}: invalid amount (orderTotal=${order.totalAmount}, requestedAmount=${amount})`);
+            return res.status(400).json({ success: false, error: 'Invalid order amount for Payzy' });
+        }
+
+        const x_amount = effectiveAmount.toFixed(2);
         const x_order_id = orderId;
         const x_response_url = `${FRONTEND_URL}/?payment=payzy-callback`;
         
@@ -253,6 +273,8 @@ exports.generatePayzyPayload = async (req, res, next) => {
         const x_zip = customerDetails.postalCode || '00000';
         const x_phone = customerDetails.contact || '000000000';
         const x_email = customerDetails.email || 'customer@example.com';
+
+        logger.info(`Payzy payload amount resolved for order ${orderId}: ${x_amount}`);
         
         const x_ship_to_first_name = x_first_name;
         const x_ship_to_last_name = x_last_name;
