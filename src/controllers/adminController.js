@@ -319,3 +319,5 @@ module.exports = {
   verifyAdmin,
   getAdminStats
 };
+
+// Simple script
