@@ -51,7 +51,9 @@ const defaultOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
   'https://vengase.com',
-  'https://www.vengase.com'
+  'https://www.vengase.com',
+  'https://webxpay.com',
+  'https://stagingxpay.info'
 ];
 
 const corsAllowlist = Array.from(new Set([...defaultOrigins, ...allowedOrigins]));
