@@ -29,19 +29,9 @@ const PORT = process.env.PORT || 5000;
 // Initialize Firebase
 initializeFirebase();
 
-// Rate limiting (disabled for development)
-const limiter = rateLimit({
-  windowMs: (process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000, // 15 minutes
-  max: process.env.RATE_LIMIT_MAX_REQUESTS || 10000, // Increased to 10000 for development
-  message: 'Too many requests from this IP, please try again later.',
-});
-
 // Middleware
 app.use(helmet());
-// Skip rate limiting in development
-if (process.env.NODE_ENV === 'production') {
-  app.use(limiter);
-}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
@@ -58,7 +48,7 @@ const defaultOrigins = [
 
 const corsAllowlist = Array.from(new Set([...defaultOrigins, ...allowedOrigins]));
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     // Allow server-to-server requests (no Origin header) and allowlisted browsers.
     if (!origin || corsAllowlist.includes(origin)) {
@@ -72,10 +62,25 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   optionsSuccessStatus: 200
-}));
+};
+
+app.use(cors(corsOptions));
 
 // Handle CORS preflight across all routes.
-app.options('*', cors());
+app.options('*', cors(corsOptions));
+
+// Rate limiting (disabled for development). In production, do not rate-limit
+// browser preflight (OPTIONS) or health checks.
+const limiter = rateLimit({
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 10000),
+  message: 'Too many requests from this IP, please try again later.',
+  skip: (req) => req.method === 'OPTIONS' || req.path === '/health',
+});
+
+if (process.env.NODE_ENV === 'production') {
+  app.use(limiter);
+}
 
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 app.use(express.json({ limit: '10mb' }));
