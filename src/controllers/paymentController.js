@@ -132,28 +132,32 @@ exports.generatePaymentPayload = async (req, res, next) => {
 exports.paymentCallback = async (req, res, next) => {
     const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
     try {
-        const body = req.body;
+        const body = (req.body && Object.keys(req.body).length > 0) ? req.body : (req.query || {});
         logger.info('WebXPay Callback received:', body);
 
         // ----- Security guard: verify secret_key sent back matches ours -----
-        const receivedSecretKey = body.secret_key;
-        if (!receivedSecretKey || receivedSecretKey !== WEBXPAY_SECRET_KEY) {
+        const receivedSecretKey = String(
+            body.secret_key || body.secretKey || body.x_secret_key || ''
+        ).trim();
+        const expectedSecretKey = String(WEBXPAY_SECRET_KEY || '').trim();
+
+        if (!receivedSecretKey || receivedSecretKey !== expectedSecretKey) {
             logger.warn('WebXPay callback rejected: secret_key mismatch');
             return res.redirect(`${FRONTEND_URL}/?payment=failed`);
         }
 
         // ----- Parse payment data -----
         // WebXPay sends base64-encoded, RSA-encrypted string: orderId|refNo|datetime|statusCode|comment|gateway
-        const paymentB64 = body.payment;
+        const paymentB64 = body.payment || body.payment_data || body.paymentData || body.x_payment;
 
         if (!paymentB64) {
             logger.warn('WebXPay callback missing payment field');
             return res.redirect(`${FRONTEND_URL}/?payment=failed`);
         }
 
-        let orderId = null;
-        let statusCode = null;
-        let comment = '';
+        let orderId = body.order_id || body.x_order_id || body.orderId || null;
+        let statusCode = body.status_code || body.response_code || body.x_status_code || null;
+        let comment = body.comment || body.response_message || '';
 
         // Try RSA publicDecrypt (WebXPay encrypts callback with their private key → decrypt with their public key)
         if (WEBXPAY_PUBLIC_KEY) {
@@ -204,8 +208,12 @@ exports.paymentCallback = async (req, res, next) => {
         logger.info(`WebXPay parsed: orderId=${orderId}, statusCode=${statusCode}, comment=${comment}`);
 
         if (orderId) {
-            // status_code '0' or '00' means success in WebXPay
-            if (statusCode === '0' || statusCode === '00') {
+            const normalizedStatus = String(statusCode || '').trim().toLowerCase();
+            const normalizedComment = String(comment || '').trim().toLowerCase();
+            const isSuccess = ['0', '00', '1', 'ok', 'success', 'approved', 'paid'].includes(normalizedStatus)
+                || /success|approved|paid/.test(normalizedComment);
+
+            if (isSuccess) {
                 await Order.updatePaymentStatus(orderId, 'paid');
                 await Order.updateOrderStatus(orderId, 'confirmed');
                 logger.info(`Order ${orderId} payment marked as PAID and CONFIRMED`);
