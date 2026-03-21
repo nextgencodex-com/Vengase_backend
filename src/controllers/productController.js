@@ -271,10 +271,23 @@ const enforceNewArrivalLimit = async (currentProductId = null) => {
 const getNewArrivals = async (req, res, next) => {
   try {
     const allProducts = await Product.findAllSimple();
-    const newArrivals = allProducts
+    const flaggedNewArrivals = allProducts
       .filter(p => p.isNewArrival === true)
       .sort((a, b) => new Date(b.newArrivalAddedAt) - new Date(a.newArrivalAddedAt))
       .slice(0, 4);
+
+    // Keep homepage stable at 4 cards by backfilling with most recent products.
+    const selectedIds = new Set(flaggedNewArrivals.map((p) => String(p.id)));
+    const recentFallback = allProducts
+      .filter((p) => !selectedIds.has(String(p.id)))
+      .sort((a, b) => {
+        const aTime = new Date(a.createdAt || a.newArrivalAddedAt || 0).getTime();
+        const bTime = new Date(b.createdAt || b.newArrivalAddedAt || 0).getTime();
+        if (aTime !== bTime) return bTime - aTime;
+        return Number(b.id || 0) - Number(a.id || 0);
+      });
+
+    const newArrivals = [...flaggedNewArrivals, ...recentFallback].slice(0, 4);
 
     res.status(200).json({
       success: true,
