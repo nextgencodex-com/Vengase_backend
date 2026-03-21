@@ -32,6 +32,11 @@ initializeFirebase();
 // Middleware
 app.use(helmet());
 
+if (process.env.NODE_ENV === 'production') {
+  const trustProxy = process.env.TRUST_PROXY;
+  app.set('trust proxy', trustProxy ? trustProxy : 1);
+}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
@@ -69,18 +74,19 @@ app.use(cors(corsOptions));
 // Handle CORS preflight across all routes.
 app.options('*', cors(corsOptions));
 
-// Rate limiting (disabled for development). In production, do not rate-limit
-// browser preflight (OPTIONS) or health checks.
-const limiter = rateLimit({
+// Rate limiting (disabled for development). Limit API traffic only.
+const apiLimiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
   max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 10000),
   message: 'Too many requests from this IP, please try again later.',
-  skip: (req) => req.method === 'OPTIONS' || req.path === '/health',
+  skip: (req) => (
+    req.method === 'OPTIONS' ||
+    req.originalUrl === '/health' ||
+    req.originalUrl.startsWith('/images') ||
+    req.originalUrl.startsWith('/uploads') ||
+    req.path === '/products/new-arrivals'
+  ),
 });
-
-if (process.env.NODE_ENV === 'production') {
-  app.use(limiter);
-}
 
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
 app.use(express.json({ limit: '10mb' }));
@@ -103,6 +109,10 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
+if (process.env.NODE_ENV === 'production') {
+  app.use('/api/v1', apiLimiter);
+}
+
 app.use('/api/v1/products', productRoutes);
 app.use('/api/v1/categories', categoryRoutes);
 app.use('/api/v1/orders', orderRoutes);
