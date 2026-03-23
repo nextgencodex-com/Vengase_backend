@@ -15,6 +15,7 @@ const productSchema = Joi.object({
     Joi.number().integer().min(0)
   ).optional(),
   img: Joi.string().optional().allow(''),
+  images: Joi.array().items(Joi.string().allow('')).max(4).optional(),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),
@@ -38,6 +39,7 @@ const productUpdateSchema = Joi.object({
     Joi.number().integer().min(0)
   ).optional(),
   img: Joi.string().optional().allow(''),
+  images: Joi.array().items(Joi.string().allow('')).max(4).optional(),
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),

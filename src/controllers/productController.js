@@ -2,6 +2,33 @@ const Product = require('../models/Product');
 const ImageService = require('../services/ImageService');
 const logger = require('../utils/logger');
 
+const IMAGE_FALLBACK = '/images/prod1.png';
+
+const normalizeImageList = (images = []) => {
+  if (!Array.isArray(images)) return [];
+  return images.filter(Boolean).slice(0, 4);
+};
+
+const processImageList = async (images = [], productName = 'product') => {
+  const normalizedImages = normalizeImageList(images);
+  const processed = [];
+
+  for (const image of normalizedImages) {
+    if (ImageService.isBase64Image(image)) {
+      try {
+        const saved = await ImageService.saveBase64Image(image, productName);
+        processed.push(saved);
+      } catch (error) {
+        logger.warn('Failed to process one image, skipping:', error.message);
+      }
+    } else {
+      processed.push(image);
+    }
+  }
+
+  return processed.slice(0, 4);
+};
+
 // @desc    Get all products
 // @route   GET /api/v1/products
 // @access  Public
@@ -72,18 +99,27 @@ const getProduct = async (req, res, next) => {
 // @access  Private (Admin)
 const createProduct = async (req, res, next) => {
   try {
-    let imageUrl = req.body.img;
+    let processedImages = await processImageList(req.body.images, req.body.name);
 
-    // Handle base64 image data from frontend
-    if (ImageService.isBase64Image(req.body.img)) {
-      try {
-        imageUrl = await ImageService.saveBase64Image(req.body.img, req.body.name);
-        logger.info(`Image processed and saved for product: ${req.body.name}`);
-      } catch (imageError) {
-        logger.warn('Failed to save image, using fallback:', imageError.message);
-        logger.error('Full image save error:', imageError);
-        imageUrl = '/images/prod1.png'; // Fallback to existing image
+    // Backward compatibility for single image payloads
+    if (processedImages.length === 0 && req.body.img) {
+      if (ImageService.isBase64Image(req.body.img)) {
+        try {
+          const savedImage = await ImageService.saveBase64Image(req.body.img, req.body.name);
+          processedImages = [savedImage];
+          logger.info(`Image processed and saved for product: ${req.body.name}`);
+        } catch (imageError) {
+          logger.warn('Failed to save image, using fallback:', imageError.message);
+          logger.error('Full image save error:', imageError);
+          processedImages = [IMAGE_FALLBACK];
+        }
+      } else {
+        processedImages = [req.body.img];
       }
+    }
+
+    if (processedImages.length === 0) {
+      processedImages = [IMAGE_FALLBACK];
     }
 
     const isNewArrival = req.body.isNewArrival === true || req.body.isNewArrival === 'true';
@@ -100,7 +136,8 @@ const createProduct = async (req, res, next) => {
       features: req.body.features || [],
       colors: req.body.colors || [],
       stock: req.body.stock || {},
-      img: imageUrl,
+      img: processedImages[0],
+      images: processedImages,
       rating: req.body.rating || 0,
       reviews: req.body.reviews || 0,
       status: req.body.status || 'instock',
@@ -132,6 +169,14 @@ const createProduct = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
   try {
     const updateData = { ...req.body };
+    const currentProduct = await Product.findById(req.params.id);
+
+    if (!currentProduct) {
+      return res.status(404).json({
+        success: false,
+        error: 'Product not found'
+      });
+    }
     
     // Parse price if provided
     if (updateData.price) {
@@ -153,15 +198,24 @@ const updateProduct = async (req, res, next) => {
       updateData.sizeChartType = updateData.sizeChartType || null;
     }
 
+    // Handle multi-image update
+    if ('images' in updateData) {
+      const processedImages = await processImageList(updateData.images, updateData.name || currentProduct.name);
+      if (processedImages.length > 0) {
+        updateData.images = processedImages;
+        updateData.img = processedImages[0];
+      } else {
+        delete updateData.images;
+      }
+    }
+
     // Handle image update
     if (updateData.img && ImageService.isBase64Image(updateData.img)) {
       try {
-        // Get the current product to potentially delete old image
-        const currentProduct = await Product.findById(req.params.id);
-        
         // Save new image
         const newImageUrl = await ImageService.saveBase64Image(updateData.img, updateData.name);
         updateData.img = newImageUrl;
+        updateData.images = [newImageUrl];
         
         // Delete old image if it exists and is not a placeholder
         if (currentProduct && currentProduct.img && 
@@ -220,14 +274,20 @@ const deleteProduct = async (req, res, next) => {
       });
     }
 
-    // Delete associated image if it exists
-    if (product.img && product.img.startsWith('/images/') && 
-        !product.img.includes('placeholder')) {
-      try {
-        await ImageService.deleteImage(product.img);
-        logger.info(`Image deleted for product: ${req.params.id}`);
-      } catch (imageError) {
-        logger.warn('Failed to delete product image:', imageError.message);
+    // Delete associated images if they exist
+    const imagesToDelete = normalizeImageList(product.images);
+    if (imagesToDelete.length === 0 && product.img) {
+      imagesToDelete.push(product.img);
+    }
+
+    for (const imageUrl of imagesToDelete) {
+      if (imageUrl && imageUrl.startsWith('/uploads/') && !imageUrl.includes('placeholder')) {
+        try {
+          await ImageService.deleteImage(imageUrl);
+          logger.info(`Image deleted for product: ${req.params.id}`);
+        } catch (imageError) {
+          logger.warn('Failed to delete product image:', imageError.message);
+        }
       }
     }
 
