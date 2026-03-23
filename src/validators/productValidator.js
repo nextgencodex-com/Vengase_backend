@@ -18,7 +18,7 @@ const productSchema = Joi.object({
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),
-  hasSizeChart: Joi.boolean().optional(),
+  sizeChartType: Joi.string().optional().allow('', null, 'polo', 'hoodies', 'oversize'),
   isNewArrival: Joi.boolean().optional(),
   newArrivalAddedAt: Joi.string().optional().allow(null, '')
 });
@@ -41,7 +41,7 @@ const productUpdateSchema = Joi.object({
   rating: Joi.number().optional().min(0).max(5),
   reviews: Joi.number().integer().optional().min(0),
   status: Joi.string().optional().valid('instock', 'outofstock', 'discontinued'),
-  hasSizeChart: Joi.boolean().optional(),
+  sizeChartType: Joi.string().optional().allow('', null, 'polo', 'hoodies', 'oversize'),
   isNewArrival: Joi.boolean().optional(),
   newArrivalAddedAt: Joi.string().optional().allow(null, '')
 });
