@@ -30,7 +30,10 @@ const PORT = process.env.PORT || 5000;
 initializeFirebase();
 
 // Middleware
-app.use(helmet());
+// Allow image/static assets to be loaded by the frontend when served from a different origin.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 
 if (process.env.NODE_ENV === 'production') {
   const trustProxy = process.env.TRUST_PROXY;

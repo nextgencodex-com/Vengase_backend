@@ -87,6 +87,7 @@ const createProduct = async (req, res, next) => {
     }
 
     const isNewArrival = req.body.isNewArrival === true || req.body.isNewArrival === 'true';
+    const hasSizeChart = req.body.hasSizeChart === true || req.body.hasSizeChart === 'true';
 
     const productData = {
       name: req.body.name,
@@ -103,6 +104,7 @@ const createProduct = async (req, res, next) => {
       rating: req.body.rating || 0,
       reviews: req.body.reviews || 0,
       status: req.body.status || 'instock',
+      hasSizeChart: hasSizeChart,
       isNewArrival: isNewArrival,
       newArrivalAddedAt: isNewArrival ? new Date().toISOString() : null
     };
@@ -145,6 +147,10 @@ const updateProduct = async (req, res, next) => {
       } else {
         updateData.newArrivalAddedAt = null;
       }
+    }
+
+    if ('hasSizeChart' in updateData) {
+      updateData.hasSizeChart = updateData.hasSizeChart === true || updateData.hasSizeChart === 'true';
     }
 
     // Handle image update
