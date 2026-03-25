@@ -39,8 +39,8 @@ class Category {
           ]
         },
         {
-          name: 'jewelry',
-          label: 'Jewelry',
+          name: 'jewellery',
+          label: 'Jewellery',
           subcategories: [
             { value: 'bracelets', label: 'Bracelets' },
             { value: 'necklaces', label: 'Necklaces' },

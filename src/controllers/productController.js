@@ -4,6 +4,12 @@ const logger = require('../utils/logger');
 
 const IMAGE_FALLBACK = '/images/prod1.png';
 
+const normalizeCategoryAlias = (category) => {
+  if (!category) return category;
+  const normalized = String(category).trim().toLowerCase();
+  return normalized === 'jewellery' ? 'jewelry' : normalized;
+};
+
 const normalizeImageList = (images = []) => {
   if (!Array.isArray(images)) return [];
   return images.filter(Boolean).slice(0, 4);
@@ -35,7 +41,7 @@ const processImageList = async (images = [], productName = 'product') => {
 const getProducts = async (req, res, next) => {
   try {
     const filters = {
-      category: req.query.category,
+      category: normalizeCategoryAlias(req.query.category),
       subcategory: req.query.subcategory,
       status: req.query.status,
       minPrice: req.query.minPrice,
