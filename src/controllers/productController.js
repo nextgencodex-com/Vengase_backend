@@ -10,6 +10,41 @@ const normalizeCategoryAlias = (category) => {
   return normalized === 'jewellery' ? 'jewelry' : normalized;
 };
 
+const toNumberOrNull = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizeDiscountFields = ({ price, discountPrice, discountPercentage }) => {
+  const basePrice = Number(price) || 0;
+
+  const parsedDiscountPrice = toNumberOrNull(discountPrice);
+  const parsedDiscountPercentage = toNumberOrNull(discountPercentage);
+
+  let normalizedDiscountPrice = null;
+  let normalizedDiscountPercentage = null;
+  let discountedPrice = null;
+
+  if (parsedDiscountPrice !== null && parsedDiscountPrice > 0 && parsedDiscountPrice < basePrice) {
+    normalizedDiscountPrice = parsedDiscountPrice;
+    discountedPrice = parsedDiscountPrice;
+  } else if (parsedDiscountPercentage !== null && parsedDiscountPercentage > 0 && parsedDiscountPercentage < 100) {
+    normalizedDiscountPercentage = parsedDiscountPercentage;
+    const computedPrice = basePrice * (1 - normalizedDiscountPercentage / 100);
+    discountedPrice = Math.max(0, Number(computedPrice.toFixed(2)));
+  }
+
+  return {
+    discountPrice: normalizedDiscountPrice,
+    discountPercentage: normalizedDiscountPercentage,
+    discountedPrice
+  };
+};
+
 const normalizeImageList = (images = []) => {
   if (!Array.isArray(images)) return [];
   return images.filter(Boolean).slice(0, 4);
@@ -130,10 +165,16 @@ const createProduct = async (req, res, next) => {
 
     const isNewArrival = req.body.isNewArrival === true || req.body.isNewArrival === 'true';
     const sizeChartType = req.body.sizeChartType || null;
+    const basePrice = parseFloat(req.body.price);
+    const discountData = normalizeDiscountFields({
+      price: basePrice,
+      discountPrice: req.body.discountPrice,
+      discountPercentage: req.body.discountPercentage
+    });
 
     const productData = {
       name: req.body.name,
-      price: parseFloat(req.body.price),
+      price: basePrice,
       description: req.body.description,
       detailedDescription: req.body.detailedDescription,
       category: req.body.category,
@@ -147,6 +188,9 @@ const createProduct = async (req, res, next) => {
       rating: req.body.rating || 0,
       reviews: req.body.reviews || 0,
       status: req.body.status || 'instock',
+      discountPrice: discountData.discountPrice,
+      discountPercentage: discountData.discountPercentage,
+      discountedPrice: discountData.discountedPrice,
       sizeChartType: sizeChartType,
       isNewArrival: isNewArrival,
       newArrivalAddedAt: isNewArrival ? new Date().toISOString() : null
@@ -185,8 +229,16 @@ const updateProduct = async (req, res, next) => {
     }
     
     // Parse price if provided
-    if (updateData.price) {
+    if (updateData.price !== undefined) {
       updateData.price = parseFloat(updateData.price);
+    }
+
+    if ('discountPrice' in updateData) {
+      updateData.discountPrice = toNumberOrNull(updateData.discountPrice);
+    }
+
+    if ('discountPercentage' in updateData) {
+      updateData.discountPercentage = toNumberOrNull(updateData.discountPercentage);
     }
 
     // Handle isNewArrival flag
@@ -202,6 +254,18 @@ const updateProduct = async (req, res, next) => {
 
     if ('sizeChartType' in updateData) {
       updateData.sizeChartType = updateData.sizeChartType || null;
+    }
+
+    if ('price' in updateData || 'discountPrice' in updateData || 'discountPercentage' in updateData) {
+      const mergedDiscountData = normalizeDiscountFields({
+        price: 'price' in updateData ? updateData.price : currentProduct.price,
+        discountPrice: 'discountPrice' in updateData ? updateData.discountPrice : currentProduct.discountPrice,
+        discountPercentage: 'discountPercentage' in updateData ? updateData.discountPercentage : currentProduct.discountPercentage
+      });
+
+      updateData.discountPrice = mergedDiscountData.discountPrice;
+      updateData.discountPercentage = mergedDiscountData.discountPercentage;
+      updateData.discountedPrice = mergedDiscountData.discountedPrice;
     }
 
     // Handle multi-image update
