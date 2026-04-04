@@ -37,21 +37,35 @@ class Product {
       // Start from ID 1000 to avoid conflicts with static products (IDs 1-22)
       const MIN_DYNAMIC_ID = 1000;
       
-      const snapshot = await db.collection(this.collection)
-        .where('id', '>=', MIN_DYNAMIC_ID)
-        .orderBy('id', 'desc')
-        .limit(1)
-        .get();
-      
-      if (snapshot.empty) {
-        return MIN_DYNAMIC_ID; // Start from 1000
+      try {
+        const snapshot = await db.collection(this.collection)
+          .where('id', '>=', MIN_DYNAMIC_ID)
+          .orderBy('id', 'desc')
+          .limit(1)
+          .get();
+        
+        if (snapshot.empty) {
+          return MIN_DYNAMIC_ID;
+        }
+        
+        const lastProduct = snapshot.docs[0].data();
+        return (lastProduct.id || MIN_DYNAMIC_ID - 1) + 1;
+      } catch (indexError) {
+        // Fallback if composite index not available
+        logger.warn('generateIntegerId index error, using fallback:', indexError.message);
+        const snapshot = await db.collection(this.collection).get();
+        let maxId = MIN_DYNAMIC_ID - 1;
+        snapshot.forEach(doc => {
+          const data = doc.data();
+          if (data.id && data.id >= MIN_DYNAMIC_ID) {
+            maxId = Math.max(maxId, data.id);
+          }
+        });
+        return maxId + 1;
       }
-      
-      const lastProduct = snapshot.docs[0].data();
-      return (lastProduct.id || MIN_DYNAMIC_ID - 1) + 1;
     } catch (error) {
       logger.warn('Error generating ID, using timestamp:', error);
-      return Date.now(); // Fallback to timestamp (will be > 1000)
+      return Date.now();
     }
   }
 
@@ -220,14 +234,32 @@ class Product {
   async findAllSimple() {
     try {
       const db = getFirestore();
-      // Simple query with no filters to avoid index issues
-      const snapshot = await db.collection(this.collection)
-        .orderBy('createdAt', 'desc')
-        .get();
+      let snapshot;
+      
+      try {
+        // Try ordered query first
+        snapshot = await db.collection(this.collection)
+          .orderBy('createdAt', 'desc')
+          .get();
+      } catch (orderError) {
+        // Fallback: simple unordered query if orderBy fails (e.g. mixed types or missing index)
+        logger.warn('findAllSimple orderBy failed, using unordered query:', orderError.message);
+        snapshot = await db.collection(this.collection).get();
+      }
       
       const products = [];
       snapshot.forEach(doc => {
         products.push(doc.data());
+      });
+      
+      // Sort in memory as fallback — newest first based on id (higher id = newer)
+      products.sort((a, b) => {
+        // Try createdAt first
+        const aTime = a.createdAt ? (a.createdAt.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt).getTime()) : 0;
+        const bTime = b.createdAt ? (b.createdAt.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt).getTime()) : 0;
+        if (aTime !== bTime) return bTime - aTime;
+        // Fallback: sort by id descending
+        return (b.id || 0) - (a.id || 0);
       });
       
       return products;
