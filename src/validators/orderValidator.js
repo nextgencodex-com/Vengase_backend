@@ -13,6 +13,10 @@ const orderSchema = Joi.object({
     color: Joi.string().optional().allow(''),
     img: Joi.string().optional().allow('')
   })).min(1).required(),
+  subtotalAmount: Joi.number().optional().min(0),
+  shippingAmount: Joi.number().optional().min(0),
+  discountAmount: Joi.number().optional().min(0),
+  promoCode: Joi.string().optional().allow(''),
   totalAmount: Joi.number().required().min(0),
   shippingAddress: Joi.object({
     address: Joi.string().required().min(5).max(500),

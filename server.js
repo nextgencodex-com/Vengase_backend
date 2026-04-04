@@ -18,6 +18,7 @@ const uploadRoutes = require('./src/routes/uploadRoutes');
 const adminRoutes = require('./src/routes/adminRoutes');
 const authRoutes = require('./src/routes/authRoutes');
 const paymentRoutes = require('./src/routes/paymentRoutes');
+const promoCodeRoutes = require('./src/routes/promoCodeRoutes');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
@@ -92,8 +93,9 @@ const apiLimiter = rateLimit({
 });
 
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Product creation uploads base64 images, so the default JSON limit is too small.
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Static files - serve uploaded images
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
@@ -123,6 +125,7 @@ app.use('/api/v1/upload', uploadRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/payment', paymentRoutes);
+app.use('/api/v1/promo-codes', promoCodeRoutes);
 
 // Error handling middleware
 app.use(notFound);

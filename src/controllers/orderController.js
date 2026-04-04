@@ -1,4 +1,5 @@
 const Order = require('../models/Order');
+const PromoCode = require('../models/PromoCode');
 const logger = require('../utils/logger');
 const { sendOrderConfirmationEmails } = require('../utils/emailService');
 
@@ -6,6 +7,34 @@ const { sendOrderConfirmationEmails } = require('../utils/emailService');
 const createOrder = async (req, res, next) => {
   try {
     const normalizedPaymentMethod = String(req.body.paymentMethod || '').trim().toLowerCase();
+    const subtotalAmount = Number(req.body.subtotalAmount || req.body.totalAmount || 0);
+    const shippingAmount = Number(req.body.shippingAmount || 0);
+    const requestedPromoCode = String(req.body.promoCode || '').trim();
+
+    let promoCode = null;
+    let promoCodeId = null;
+    let discountAmount = 0;
+    let finalTotalAmount = Number(req.body.totalAmount || 0);
+
+    if (requestedPromoCode) {
+      const promoResult = await PromoCode.validateCode(requestedPromoCode, subtotalAmount);
+      if (!promoResult.valid) {
+        return res.status(400).json({
+          success: false,
+          error: promoResult.message
+        });
+      }
+
+      promoCode = promoResult.promo.code;
+      promoCodeId = promoResult.promo.id;
+      discountAmount = Number(promoResult.discountAmount || 0);
+      finalTotalAmount = Math.max(0, Number(promoResult.finalAmount || 0) + shippingAmount);
+    }
+
+    if (!requestedPromoCode) {
+      finalTotalAmount = Number(req.body.totalAmount || (subtotalAmount + shippingAmount));
+    }
+
     logger.info(`Create order request received. paymentMethod(raw='${req.body.paymentMethod || ''}', normalized='${normalizedPaymentMethod || ''}'), userEmail='${req.body.userEmail || ''}'`);
 
     const orderData = {
@@ -13,7 +42,12 @@ const createOrder = async (req, res, next) => {
       userEmail: req.body.userEmail,
       userName: req.body.userName,
       items: req.body.items,
-      totalAmount: req.body.totalAmount,
+      subtotalAmount,
+      shippingAmount,
+      discountAmount,
+      promoCode,
+      promoCodeId,
+      totalAmount: finalTotalAmount,
       shippingAddress: req.body.shippingAddress,
       phone: req.body.phone,
       paymentMethod: normalizedPaymentMethod || req.body.paymentMethod,
@@ -21,6 +55,12 @@ const createOrder = async (req, res, next) => {
     };
 
     const order = await Order.create(orderData);
+
+    if (promoCodeId) {
+      PromoCode.incrementUsage(promoCodeId).catch((promoError) => {
+        logger.error(`Failed to increment promo usage for promo ${promoCodeId}:`, promoError);
+      });
+    }
 
     // If order is Cash on Delivery, send confirmation email immediately
     if (normalizedPaymentMethod === 'cod' || normalizedPaymentMethod === 'cash_on_delivery') {

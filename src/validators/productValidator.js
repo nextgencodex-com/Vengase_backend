@@ -1,5 +1,10 @@
 const Joi = require('joi');
 
+const validationOptions = {
+  abortEarly: true,
+  stripUnknown: true
+};
+
 const productSchema = Joi.object({
   name: Joi.string().required().min(1).max(255),
   price: Joi.number().required().min(0),
@@ -62,7 +67,7 @@ const stockUpdateSchema = Joi.object({
 });
 
 const validateProduct = (req, res, next) => {
-  const { error } = productSchema.validate(req.body);
+  const { error, value } = productSchema.validate(req.body, validationOptions);
   
   if (error) {
     return res.status(400).json({
@@ -70,12 +75,14 @@ const validateProduct = (req, res, next) => {
       error: error.details[0].message
     });
   }
+
+  req.body = value;
   
   next();
 };
 
 const validateProductUpdate = (req, res, next) => {
-  const { error } = productUpdateSchema.validate(req.body);
+  const { error, value } = productUpdateSchema.validate(req.body, validationOptions);
   
   if (error) {
     return res.status(400).json({
@@ -83,12 +90,14 @@ const validateProductUpdate = (req, res, next) => {
       error: error.details[0].message
     });
   }
+
+  req.body = value;
   
   next();
 };
 
 const validateStockUpdate = (req, res, next) => {
-  const { error } = stockUpdateSchema.validate(req.body);
+  const { error, value } = stockUpdateSchema.validate(req.body, validationOptions);
   
   if (error) {
     return res.status(400).json({
@@ -96,6 +105,8 @@ const validateStockUpdate = (req, res, next) => {
       error: error.details[0].message
     });
   }
+
+  req.body = value;
   
   next();
 };
