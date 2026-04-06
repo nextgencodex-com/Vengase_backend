@@ -7,6 +7,10 @@ class Newsletter {
     this.collection = 'newsletter_subscriptions';
   }
 
+  getDocIdFromEmail(email = '') {
+    return encodeURIComponent(String(email || '').trim().toLowerCase());
+  }
+
   // Lazy initialization of Firestore
   getDb() {
     if (!this.db) {
@@ -18,33 +22,30 @@ class Newsletter {
   // Subscribe email to newsletter
   async subscribe(email) {
     try {
-      // Check if email already exists
-      const existingSnapshot = await this.getDb()
-        .collection(this.collection)
-        .where('email', '==', email)
-        .get();
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      const docId = this.getDocIdFromEmail(normalizedEmail);
+      const docRef = this.getDb().collection(this.collection).doc(docId);
+      const existingDoc = await docRef.get();
 
-      if (!existingSnapshot.empty) {
+      if (existingDoc.exists) {
         return {
           success: false,
           message: 'Email already subscribed to newsletter',
-          data: existingSnapshot.docs[0].data()
+          data: { id: existingDoc.id, ...existingDoc.data() }
         };
       }
 
       // Add new subscription
       const newSubscription = {
-        email,
+        email: normalizedEmail,
         subscribedAt: new Date(),
         updatedAt: new Date(),
         status: 'Active'
       };
 
-      const docRef = await this.getDb()
-        .collection(this.collection)
-        .add(newSubscription);
+      await docRef.set(newSubscription);
 
-      logger.info(`Newsletter subscription created: ${email}`);
+      logger.info(`Newsletter subscription created: ${normalizedEmail}`);
 
       return {
         success: true,

@@ -6,10 +6,10 @@ const newsletter = new Newsletter();
 // Subscribe to newsletter
 const subscribe = async (req, res, next) => {
   try {
-    const { email } = req.body;
+    const email = String(req.body?.email || '').trim();
 
     // Validate email
-    if (!email || !email.trim()) {
+    if (!email) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
@@ -19,7 +19,7 @@ const subscribe = async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    const result = await newsletter.subscribe(email.toLowerCase().trim());
+    const result = await newsletter.subscribe(email);
 
     if (!result.success) {
       return res.status(400).json({ 

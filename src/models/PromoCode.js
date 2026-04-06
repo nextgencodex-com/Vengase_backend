@@ -210,7 +210,11 @@ class PromoCode {
       return { valid: false, message: 'Promo code not found' };
     }
 
-    if (!promo.isActive) {
+    const isActive = typeof promo.isActive === 'string'
+      ? promo.isActive.toLowerCase() === 'true'
+      : Boolean(promo.isActive);
+
+    if (!isActive) {
       return { valid: false, message: 'Promo code is inactive' };
     }
 
@@ -226,15 +230,20 @@ class PromoCode {
       return { valid: false, message: 'Promo code has expired' };
     }
 
-    if (promo.usageLimit !== null && Number(promo.usedCount || 0) >= Number(promo.usageLimit || 0)) {
+    const usageLimitValue = this.sanitizeNumber(promo.usageLimit, 0);
+    const usageLimit = usageLimitValue > 0 ? usageLimitValue : null;
+    const usedCount = this.sanitizeNumber(promo.usedCount, 0);
+
+    if (usageLimit !== null && usedCount >= usageLimit) {
       return { valid: false, message: 'Promo code usage limit reached' };
     }
 
     const sanitizedAmount = this.sanitizeNumber(orderAmount, 0);
-    if (sanitizedAmount < Number(promo.minOrderAmount || 0)) {
+    const minOrderAmount = this.sanitizeNumber(promo.minOrderAmount, 0);
+    if (sanitizedAmount < minOrderAmount) {
       return {
         valid: false,
-        message: `Minimum order amount is Rs ${Number(promo.minOrderAmount || 0).toFixed(2)}`
+        message: `Minimum order amount is Rs ${minOrderAmount.toFixed(2)}`
       };
     }
 
