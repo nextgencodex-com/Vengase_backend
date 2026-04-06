@@ -19,6 +19,8 @@ const adminRoutes = require('./src/routes/adminRoutes');
 const authRoutes = require('./src/routes/authRoutes');
 const paymentRoutes = require('./src/routes/paymentRoutes');
 const promoCodeRoutes = require('./src/routes/promoCodeRoutes');
+const newsletterRoutes = require('./src/routes/newsletterRoutes');
+const contactRoutes = require('./src/routes/contactRoutes');
 
 // Import middleware
 const errorHandler = require('./src/middleware/errorHandler');
@@ -126,6 +128,8 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/payment', paymentRoutes);
 app.use('/api/v1/promo-codes', promoCodeRoutes);
+app.use('/api/v1/newsletter', newsletterRoutes);
+app.use('/api/v1/contact', contactRoutes);
 
 // Error handling middleware
 app.use(notFound);

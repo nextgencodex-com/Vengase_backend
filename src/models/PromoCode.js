@@ -12,7 +12,18 @@ class PromoCode {
   }
 
   sanitizeNumber(value, fallback = 0) {
-    const num = Number(value);
+    if (value === null || value === undefined || value === '') {
+      return fallback;
+    }
+
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    const sanitized = String(value)
+      .replace(/,/g, '')
+      .replace(/[^0-9.-]/g, '');
+    const num = Number(sanitized);
     return Number.isFinite(num) ? num : fallback;
   }
 
@@ -160,8 +171,19 @@ class PromoCode {
         .limit(1)
         .get();
 
-      if (snapshot.empty) return null;
-      return snapshot.docs[0].data();
+      if (!snapshot.empty) {
+        return snapshot.docs[0].data();
+      }
+
+      // Backward compatibility for existing documents that may store code in
+      // inconsistent casing or with surrounding spaces.
+      const allSnapshot = await db.collection(this.collection).get();
+      const fallbackDoc = allSnapshot.docs.find((doc) => {
+        const data = doc.data() || {};
+        return this.normalizeCode(data.code) === normalized;
+      });
+
+      return fallbackDoc ? fallbackDoc.data() : null;
     } catch (error) {
       logger.error('Error finding promo code by code:', error);
       throw error;
