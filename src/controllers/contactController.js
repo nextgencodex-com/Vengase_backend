@@ -1,5 +1,6 @@
 const { Resend } = require('resend');
 const logger = require('../utils/logger');
+const { getFirestore } = require('../../config/firebase');
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -40,7 +41,10 @@ const sendWithFallbackFrom = async (payload, primaryFrom, fallbackFrom) => {
 
 const sendContactEmail = async (req, res, next) => {
   try {
-    const { name, email, subject, message } = req.body;
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim();
+    const subject = String(req.body?.subject || '').trim();
+    const message = String(req.body?.message || '').trim();
 
     // Validate input
     if (!name || !email || !subject || !message) {
@@ -71,11 +75,24 @@ const sendContactEmail = async (req, res, next) => {
     const fromEmail = process.env.FROM_EMAIL || 'Vengase <orders@vengase.com>';
     const fallbackFromEmail = process.env.RESEND_FALLBACK_FROM || 'onboarding@resend.dev';
 
+    // Save contact message first so submissions are never lost even if email provider fails.
+    const db = getFirestore();
+    const contactDoc = {
+      name,
+      email: email.toLowerCase(),
+      subject,
+      message,
+      status: 'new',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    await db.collection('contact_messages').add(contactDoc);
+
     if (!process.env.RESEND_API_KEY) {
-      logger.error('RESEND_API_KEY is missing. Cannot send contact form emails.');
-      return res.status(500).json({
-        success: false,
-        error: 'Email service is not configured. Please try again later.'
+      logger.warn('RESEND_API_KEY is missing. Contact message saved to Firestore without email notification.');
+      return res.status(200).json({
+        success: true,
+        message: 'Message received successfully. Our team will get back to you soon.'
       });
     }
 
@@ -174,7 +191,7 @@ const sendContactEmail = async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error sending contact email:', error);
-    
+
     res.status(500).json({
       success: false,
       error: 'Failed to send message. Please try again later.'

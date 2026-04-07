@@ -210,9 +210,12 @@ class PromoCode {
       return { valid: false, message: 'Promo code not found' };
     }
 
-    const isActive = typeof promo.isActive === 'string'
-      ? promo.isActive.toLowerCase() === 'true'
-      : Boolean(promo.isActive);
+    const hasExplicitActive = promo.isActive !== undefined && promo.isActive !== null;
+    const isActive = hasExplicitActive
+      ? (typeof promo.isActive === 'string'
+        ? promo.isActive.toLowerCase() === 'true'
+        : Boolean(promo.isActive))
+      : (String(promo.status || '').toLowerCase() !== 'inactive');
 
     if (!isActive) {
       return { valid: false, message: 'Promo code is inactive' };
@@ -230,16 +233,22 @@ class PromoCode {
       return { valid: false, message: 'Promo code has expired' };
     }
 
-    const usageLimitValue = this.sanitizeNumber(promo.usageLimit, 0);
+    const usageLimitValue = this.sanitizeNumber(
+      promo.usageLimit ?? promo.maxUses ?? promo.limit,
+      0
+    );
     const usageLimit = usageLimitValue > 0 ? usageLimitValue : null;
-    const usedCount = this.sanitizeNumber(promo.usedCount, 0);
+    const usedCount = this.sanitizeNumber(promo.usedCount ?? promo.usageCount, 0);
 
     if (usageLimit !== null && usedCount >= usageLimit) {
       return { valid: false, message: 'Promo code usage limit reached' };
     }
 
     const sanitizedAmount = this.sanitizeNumber(orderAmount, 0);
-    const minOrderAmount = this.sanitizeNumber(promo.minOrderAmount, 0);
+    const minOrderAmount = this.sanitizeNumber(
+      promo.minOrderAmount ?? promo.minimumOrderAmount ?? promo.minAmount,
+      0
+    );
     if (sanitizedAmount < minOrderAmount) {
       return {
         valid: false,
@@ -247,13 +256,23 @@ class PromoCode {
       };
     }
 
-    const discountAmount = this.calculateDiscount(promo, sanitizedAmount);
+    const normalizedPromo = {
+      ...promo,
+      discountType: String(promo.discountType || promo.type || 'percentage').toLowerCase().trim(),
+      discountValue: this.sanitizeNumber(promo.discountValue ?? promo.value ?? promo.discount, 0),
+      maxDiscountAmount: this.sanitizeNumber(
+        promo.maxDiscountAmount ?? promo.maxDiscount ?? promo.discountCap,
+        0
+      )
+    };
+
+    const discountAmount = this.calculateDiscount(normalizedPromo, sanitizedAmount);
     const finalAmount = Math.max(0, sanitizedAmount - discountAmount);
 
     return {
       valid: true,
       message: 'Promo code applied successfully',
-      promo,
+      promo: normalizedPromo,
       discountAmount,
       finalAmount
     };
