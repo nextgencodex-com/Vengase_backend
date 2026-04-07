@@ -66,12 +66,24 @@ const deleteSubscription = async (req, res, next) => {
     }
 
     // Check if subscription exists
-    const existing = await newsletter.getById(id);
+    let targetId = id;
+    let existing = await newsletter.getById(id);
+    
+    if (!existing) {
+      // Express auto-decodes path params, so "test%40email.com" becomes "test@email.com". 
+      // Re-encode it because the Firestore doc ID is literal "test%40email.com"
+      const encodedId = encodeURIComponent(id);
+      existing = await newsletter.getById(encodedId);
+      if (existing) {
+        targetId = encodedId;
+      }
+    }
+
     if (!existing) {
       return res.status(404).json({ error: 'Subscription not found' });
     }
 
-    await newsletter.delete(id);
+    await newsletter.delete(targetId);
     res.status(200).json({
       success: true,
       message: 'Subscription deleted successfully'
