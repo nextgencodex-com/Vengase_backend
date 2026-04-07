@@ -92,7 +92,7 @@ const validatePromoCode = async (req, res, next) => {
     const rawAmount = req.body?.orderAmount ?? req.body?.subtotal ?? req.body?.subtotalAmount ?? req.body?.totalAmount ?? 0;
 
     if (!code) {
-      return res.status(400).json({
+      return res.status(200).json({
         success: false,
         error: 'Promo code is required'
       });
@@ -102,7 +102,7 @@ const validatePromoCode = async (req, res, next) => {
 
     if (!result.valid) {
       logger.warn(`Promo validation failed for code '${String(code).trim()}': ${result.message}. rawAmount='${rawAmount}'`);
-      return res.status(400).json({
+      return res.status(200).json({
         success: false,
         error: result.message
       });
