@@ -1,6 +1,44 @@
 const { getAuth } = require('../../config/firebase');
+const Admin = require('../models/Admin');
 const User = require('../models/User');
+const Order = require('../models/Order');
 const logger = require('../utils/logger');
+
+const toDateObject = (value) => {
+  if (!value) return null;
+
+  if (typeof value?.toDate === 'function') {
+    return value.toDate();
+  }
+
+  if (typeof value?.seconds === 'number') {
+    return new Date(value.seconds * 1000);
+  }
+
+  if (typeof value?._seconds === 'number') {
+    return new Date(value._seconds * 1000);
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  const parsedDate = new Date(value);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+};
+
+const listAllAuthUsers = async () => {
+  const allUsers = [];
+  let pageToken;
+
+  do {
+    const result = await getAuth().listUsers(1000, pageToken);
+    allUsers.push(...result.users);
+    pageToken = result.pageToken;
+  } while (pageToken);
+
+  return allUsers;
+};
 
 // @desc    Register new user (create profile after Firebase auth)
 // @route   POST /api/v1/auth/register
@@ -397,14 +435,112 @@ const revokeAdmin = async (req, res, next) => {
 // @access  Private (Admin)
 const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.getAll();
-    
-    logger.info(`Admin retrieved ${users.length} users`);
+    const [users, admins, orders] = await Promise.all([
+      User.getAll(),
+      Admin.findAll(),
+      Order.findAll()
+    ]);
+
+    const orderSummaryByUser = new Map();
+    orders.forEach((order) => {
+      const userIdKey = order.userId || null;
+      const userEmailKey = order.userEmail ? String(order.userEmail).trim().toLowerCase() : null;
+      const orderTotal = Number(order.totalAmount ?? order.total ?? order.grandTotal ?? 0);
+
+      if (!userIdKey && !userEmailKey) return;
+
+      const keys = [userIdKey, userEmailKey].filter(Boolean);
+      keys.forEach((key) => {
+        const existing = orderSummaryByUser.get(key) || {
+          orderCount: 0,
+          totalSpent: 0
+        };
+
+        existing.orderCount += 1;
+        existing.totalSpent += orderTotal;
+        orderSummaryByUser.set(key, existing);
+      });
+    });
+
+    const mergedProfiles = new Map();
+
+    users.forEach((profile) => {
+      if (profile?.uid) {
+        mergedProfiles.set(profile.uid, {
+          ...profile,
+          role: 'customer',
+          source: 'user'
+        });
+      }
+    });
+
+    admins.forEach((admin) => {
+      const existing = admin.uid ? mergedProfiles.get(admin.uid) : null;
+      const normalizedEmail = String(admin.email || '').trim().toLowerCase();
+
+      const merged = {
+        ...(existing || {}),
+        uid: admin.uid,
+        email: admin.email,
+        displayName: admin.displayName || existing?.displayName || admin.email?.split('@')[0] || 'Admin',
+        firstName: admin.firstName || existing?.firstName || '',
+        lastName: admin.lastName || existing?.lastName || '',
+        createdAt: admin.createdAt || existing?.createdAt,
+        updatedAt: admin.updatedAt || existing?.updatedAt,
+        isActive: admin.status !== 'inactive',
+        role: 'admin',
+        status: admin.status || existing?.status || 'active',
+        source: 'admin'
+      };
+
+      if (admin.uid) {
+        mergedProfiles.set(admin.uid, merged);
+      }
+
+      if (normalizedEmail && !mergedProfiles.has(normalizedEmail)) {
+        mergedProfiles.set(normalizedEmail, merged);
+      }
+    });
+
+    const adminUsers = Array.from(mergedProfiles.values()).filter((profile) => profile?.uid);
+
+    const enrichedUsers = adminUsers.map((profile) => {
+      const emailKey = String(profile.email || '').trim().toLowerCase();
+      const orderSummary = orderSummaryByUser.get(profile.uid)
+        || orderSummaryByUser.get(emailKey)
+        || {
+          orderCount: Number(profile.orderCount || 0),
+          totalSpent: Number(profile.totalSpent || 0)
+        };
+
+      const createdAtDate = toDateObject(profile.createdAt)
+        || toDateObject(profile.updatedAt)
+        || new Date();
+
+      return {
+        uid: profile.uid,
+        email: profile.email,
+        displayName: profile.displayName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profile.email?.split('@')[0] || 'User',
+        firstName: profile.firstName || '',
+        lastName: profile.lastName || '',
+        emailVerified: true,
+        disabled: profile.isActive === false,
+        createdAt: createdAtDate.toISOString(),
+        joinDate: createdAtDate.toISOString(),
+        lastSignIn: null,
+        status: profile.isActive === false ? 'inactive' : 'active',
+        orderCount: Number(orderSummary.orderCount || 0),
+        totalSpent: Number(orderSummary.totalSpent || 0),
+        customClaims: { admin: profile.role === 'admin' }
+      };
+    });
+
+    logger.info(`Admin retrieved ${enrichedUsers.length} users`);
 
     res.status(200).json({
       success: true,
-      count: users.length,
-      data: users
+      count: enrichedUsers.length,
+      data: enrichedUsers
     });
 
   } catch (error) {
