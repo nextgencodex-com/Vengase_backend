@@ -195,21 +195,22 @@ const updatePaymentStatus = async (req, res, next) => {
   try {
     const { orderId } = req.params;
     const { status } = req.body;
+    const normalizedStatus = String(status || '').trim().toLowerCase();
 
-    const validStatuses = ['pending', 'completed', 'failed', 'refunded'];
-    if (!validStatuses.includes(status)) {
+    const validStatuses = ['pending', 'completed', 'failed', 'refunded', 'paid'];
+    if (!validStatuses.includes(normalizedStatus)) {
       return res.status(400).json({
         success: false,
         error: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
       });
     }
 
-    const order = await Order.updatePaymentStatus(orderId, status);
+    const order = await Order.updatePaymentStatus(orderId, normalizedStatus);
 
     res.status(200).json({
       success: true,
       data: order,
-      message: `Payment status updated to ${status}`
+      message: `Payment status updated to ${normalizedStatus}`
     });
   } catch (error) {
     logger.error('Error in updatePaymentStatus:', error);

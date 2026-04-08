@@ -33,7 +33,7 @@ const orderStatusUpdateSchema = Joi.object({
 });
 
 const paymentStatusUpdateSchema = Joi.object({
-  status: Joi.string().required().valid('pending', 'completed', 'failed', 'refunded')
+  status: Joi.string().required().valid('pending', 'completed', 'failed', 'refunded', 'paid')
 });
 
 const validateOrder = (req, res, next) => {
