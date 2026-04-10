@@ -58,9 +58,14 @@ const defaultOrigins = [
 ];
 
 const corsAllowlist = Array.from(new Set([...defaultOrigins, ...allowedOrigins]));
+const CORS_ALLOW_ALL = String(process.env.CORS_ALLOW_ALL || 'false').toLowerCase() === 'true';
 
 const corsOptions = {
   origin: (origin, callback) => {
+    if (CORS_ALLOW_ALL) {
+      return callback(null, true);
+    }
+
     // Allow server-to-server requests (no Origin header) and allowlisted browsers.
     if (!origin || corsAllowlist.includes(origin)) {
       return callback(null, true);

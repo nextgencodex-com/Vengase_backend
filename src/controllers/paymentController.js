@@ -46,6 +46,35 @@ const PAYZY_SHOP_ID = process.env.PAYZY_SHOP_ID || 'dummy_shop_id';
 const PAYZY_TEST_MODE = process.env.PAYZY_TEST_MODE || 'on';
 const PAYZY_API_BASE_URL = String(process.env.PAYZY_API_BASE_URL || 'https://api.payzy.lk').replace(/\/+$/, '');
 
+const getByPath = (obj, path) => path.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+
+const resolvePayzyCheckoutUrl = (responseData) => {
+    const knownPaths = [
+        ['url'],
+        ['checkout_url'],
+        ['redirect_url'],
+        ['payment_url'],
+        ['data', 'url'],
+        ['data', 'checkout_url'],
+        ['data', 'redirect_url'],
+        ['data', 'payment_url'],
+        ['data', 'payment', 'url'],
+        ['result', 'url'],
+        ['result', 'checkout_url'],
+        ['result', 'redirect_url'],
+        ['result', 'payment_url']
+    ];
+
+    for (const path of knownPaths) {
+        const value = getByPath(responseData, path);
+        if (typeof value === 'string' && value.startsWith('http')) {
+            return value;
+        }
+    }
+
+    return '';
+};
+
 if (!WEBXPAY_SECRET_KEY) {
   logger.error('WEBXPAY_SECRET_KEY is not set in environment variables!');
 }
@@ -370,19 +399,22 @@ exports.generatePayzyPayload = async (req, res, next) => {
             }
         });
 
-        const payzyUrl =
-            response?.data?.url ||
-            response?.data?.data?.url ||
-            response?.data?.checkout_url ||
-            response?.data?.redirect_url;
+        const payzyUrl = resolvePayzyCheckoutUrl(response?.data || {});
 
         if (payzyUrl) {
+            logger.info(`Payzy checkout URL resolved for order ${orderId}: ${payzyUrl}`);
             res.status(200).json({
                 success: true,
-                url: payzyUrl
+                url: payzyUrl,
+                data: {
+                    x_order_id,
+                    x_amount,
+                    x_test_mode,
+                    responseShape: Object.keys(response?.data || {})
+                }
             });
         } else {
-            logger.error('Unexpected Payzy response shape:', response.data);
+            logger.error('Unexpected Payzy response shape (could not resolve checkout URL):', response.data);
             throw new Error('Invalid response from Payzy API');
         }
     } catch (error) {
