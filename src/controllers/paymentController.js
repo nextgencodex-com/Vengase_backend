@@ -48,6 +48,15 @@ const PAYZY_API_BASE_URL = String(process.env.PAYZY_API_BASE_URL || 'https://api
 
 const getByPath = (obj, path) => path.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
 
+const buildPayzyCheckoutRef = (orderId) => {
+    const cleanedOrder = String(orderId || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const orderTail = cleanedOrder.slice(-10) || 'ORDER';
+    const timestampPart = Date.now().toString(36).toUpperCase();
+    const randomPart = crypto.randomBytes(2).toString('hex').toUpperCase();
+    // Keep this short and alphanumeric to avoid gateway parsing edge-cases.
+    return `PZ${orderTail}${timestampPart}${randomPart}`.slice(0, 30);
+};
+
 const resolvePayzyCheckoutUrl = (responseData) => {
     const knownPaths = [
         ['url'],
@@ -307,7 +316,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
         }
 
         const x_amount = effectiveAmount.toFixed(2);
-        const x_order_id = orderId;
+        const x_order_id = buildPayzyCheckoutRef(orderId);
         const x_response_url = `${FRONTEND_URL}/?payment=payzy-callback`;
         
         const x_first_name = customerDetails.firstName || 'Customer';
@@ -321,7 +330,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
         const x_phone = customerDetails.contact || '000000000';
         const x_email = customerDetails.email || 'customer@example.com';
 
-        logger.info(`Payzy payload amount resolved for order ${orderId}: ${x_amount}`);
+        logger.info(`Payzy payload amount resolved for order ${orderId}: ${x_amount} (checkoutRef=${x_order_id})`);
         
         const x_ship_to_first_name = x_first_name;
         const x_ship_to_last_name = x_last_name;
@@ -379,7 +388,13 @@ exports.generatePayzyPayload = async (req, res, next) => {
         try {
             const { getFirestore } = require('../../config/firebase');
             const db = getFirestore();
-            await db.collection('orders').doc(orderId).update({ paymentMeta });
+            await db.collection('orders').doc(orderId).update({
+                paymentMeta: {
+                    ...paymentMeta,
+                    original_order_id: orderId,
+                    payzy_checkout_ref: x_order_id
+                }
+            });
         } catch (metaErr) {
             logger.warn(`Could not persist Payzy paymentMeta for order ${orderId}: ${metaErr.message}`);
         }
@@ -408,6 +423,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
                 url: payzyUrl,
                 data: {
                     x_order_id,
+                    original_order_id: orderId,
                     x_amount,
                     x_test_mode,
                     responseShape: Object.keys(response?.data || {})
@@ -439,20 +455,34 @@ exports.generatePayzyPayload = async (req, res, next) => {
 exports.verifyPayzyPayment = async (req, res, next) => {
     try {
         const { x_order_id, response_code, signature } = req.body;
-        const normalizedOrderId = normalizeOrderId(x_order_id);
+        const normalizedIncomingOrderId = normalizeOrderId(x_order_id);
 
-        if (!normalizedOrderId || !signature) {
+        if (!normalizedIncomingOrderId || !signature) {
             return res.status(400).json({ success: false, error: 'Missing parameters' });
         }
 
         const { getFirestore } = require('../../config/firebase');
         const db = getFirestore();
-        const orderDoc = await db.collection('orders').doc(normalizedOrderId).get();
+        let orderDoc = await db.collection('orders').doc(normalizedIncomingOrderId).get();
+
+        // Payzy may return a checkout reference instead of our internal order document ID.
+        if (!orderDoc.exists) {
+            const mappedQuery = await db.collection('orders')
+                .where('paymentMeta.payzy_checkout_ref', '==', normalizedIncomingOrderId)
+                .limit(1)
+                .get();
+
+            if (!mappedQuery.empty) {
+                orderDoc = mappedQuery.docs[0];
+                logger.info(`Payzy callback mapped checkoutRef ${normalizedIncomingOrderId} -> order ${orderDoc.id}`);
+            }
+        }
 
         if (!orderDoc.exists) {
             return res.status(404).json({ success: false, error: 'Order not found' });
         }
 
+        const normalizedOrderId = orderDoc.id;
         const order = orderDoc.data();
         const meta = order.paymentMeta;
 
