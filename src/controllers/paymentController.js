@@ -281,6 +281,8 @@ exports.paymentCallback = async (req, res, next) => {
 exports.generatePayzyPayload = async (req, res, next) => {
     try {
         const { orderId, amount, customerDetails } = req.body;
+        const customer = customerDetails || {};
+        const asString = (value, fallback = '') => String(value ?? fallback).trim();
 
         if (!orderId) {
             return res.status(400).json({ success: false, error: 'Missing orderId' });
@@ -293,8 +295,8 @@ exports.generatePayzyPayload = async (req, res, next) => {
         
         const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
         
-        const x_test_mode = PAYZY_TEST_MODE;
-        const x_shopid = PAYZY_SHOP_ID;
+        const x_test_mode = asString(PAYZY_TEST_MODE, 'on');
+        const x_shopid = asString(PAYZY_SHOP_ID, '');
         const orderTotal = Number(order.totalAmount);
         const requestedAmount = Number(amount);
         const effectiveAmount = Number.isFinite(orderTotal) && orderTotal > 0
@@ -306,34 +308,34 @@ exports.generatePayzyPayload = async (req, res, next) => {
             return res.status(400).json({ success: false, error: 'Invalid order amount for Payzy' });
         }
 
-        const x_amount = effectiveAmount.toFixed(2);
-        const x_order_id = orderId;
-        const x_response_url = `${FRONTEND_URL}/?payment=payzy-callback`;
+        const x_amount = asString(effectiveAmount.toFixed(2), '0.00');
+        const x_order_id = asString(orderId, '');
+        const x_response_url = asString(`${FRONTEND_URL}/?payment=payzy-callback`, '');
         
-        const x_first_name = customerDetails.firstName || 'Customer';
-        const x_last_name = customerDetails.lastName || 'Name';
-        const x_company = 'Vengase';
-        const x_address = customerDetails.address || 'Address';
-        const x_country = customerDetails.country || 'Sri Lanka';
-        const x_state = customerDetails.state || 'Western';
-        const x_city = customerDetails.city || 'City';
-        const x_zip = customerDetails.postalCode || '00000';
-        const x_phone = customerDetails.contact || '000000000';
-        const x_email = customerDetails.email || 'customer@example.com';
+        const x_first_name = asString(customer.firstName, 'Customer');
+        const x_last_name = asString(customer.lastName, 'Name');
+        const x_company = asString('Vengase', 'Vengase');
+        const x_address = asString(customer.address, 'Address');
+        const x_country = asString(customer.country, 'Sri Lanka');
+        const x_state = asString(customer.state, 'Western');
+        const x_city = asString(customer.city, 'City');
+        const x_zip = asString(customer.postalCode, '00000');
+        const x_phone = asString(customer.contact, '000000000');
+        const x_email = asString(customer.email, 'customer@example.com');
 
         logger.info(`Payzy payload amount resolved for order ${orderId}: ${x_amount}`);
         
-        const x_ship_to_first_name = x_first_name;
-        const x_ship_to_last_name = x_last_name;
-        const x_ship_to_company = x_company;
-        const x_ship_to_address = x_address;
-        const x_ship_to_country = x_country;
-        const x_ship_to_state = x_state;
-        const x_ship_to_city = x_city;
-        const x_ship_to_zip = x_zip;
-        const x_freight = '0.00';
-        const x_platform = 'custom';
-        const x_version = '1.0';
+        const x_ship_to_first_name = asString(x_first_name, 'Customer');
+        const x_ship_to_last_name = asString(x_last_name, 'Name');
+        const x_ship_to_company = asString(x_company, 'Vengase');
+        const x_ship_to_address = asString(x_address, 'Address');
+        const x_ship_to_country = asString(x_country, 'Sri Lanka');
+        const x_ship_to_state = asString(x_state, 'Western');
+        const x_ship_to_city = asString(x_city, 'City');
+        const x_ship_to_zip = asString(x_zip, '00000');
+        const x_freight = asString('0.00', '0.00');
+        const x_platform = asString('custom', 'custom');
+        const x_version = asString('1.0', '1.0');
 
         const list = "x_test_mode=" + x_test_mode +
             ",x_shopid=" + x_shopid +
@@ -360,7 +362,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
             ",x_ship_to_zip=" + x_ship_to_zip +
             ",x_freight=" + x_freight +
             ",x_platform=" + x_platform +
-            ",x_version=" + x_version +
+            ",x_version" + x_version +
             ",signed_field_names=" + 
             "x_test_mode,x_shopid,x_amount,x_order_id,x_response_url,x_first_name,x_last_name,x_company,x_address,x_country,x_state,x_city,x_zip,x_phone,x_email,x_ship_to_first_name,x_ship_to_last_name,x_ship_to_company,x_ship_to_address,x_ship_to_country,x_ship_to_state,x_ship_to_city,x_ship_to_zip,x_freight,x_platform,x_version,signed_field_names";
         
@@ -439,6 +441,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
 exports.verifyPayzyPayment = async (req, res, next) => {
     try {
         const { x_order_id, response_code, signature } = req.body;
+        const asString = (value, fallback = '') => String(value ?? fallback).trim();
         const normalizedOrderId = normalizeOrderId(x_order_id);
 
         if (!normalizedOrderId || !signature) {
@@ -460,33 +463,33 @@ exports.verifyPayzyPayment = async (req, res, next) => {
             return res.status(400).json({ success: false, error: 'Payment metadata not found for this order' });
         }
 
-        const datalist = "response_code=" + response_code +
-            ",x_test_mode=" + meta.x_test_mode +
-            ",x_shopid=" + meta.x_shopid +
-            ",x_amount=" + meta.x_amount +
-            ",x_order_id=" + meta.x_order_id +
-            ",x_response_url=" + meta.x_response_url +
-            ",x_first_name=" + meta.x_first_name +
-            ",x_last_name=" + meta.x_last_name +
-            ",x_company=" + meta.x_company +
-            ",x_address=" + meta.x_address +
-            ",x_country=" + meta.x_country +
-            ",x_state=" + meta.x_state +
-            ",x_city=" + meta.x_city +
-            ",x_zip=" + meta.x_zip +
-            ",x_phone=" + meta.x_phone +
-            ",x_email=" + meta.x_email +
-            ",x_ship_to_first_name=" + meta.x_ship_to_first_name +
-            ",x_ship_to_last_name=" + meta.x_ship_to_last_name +
-            ",x_ship_to_company=" + meta.x_ship_to_company +
-            ",x_ship_to_address=" + meta.x_ship_to_address +
-            ",x_ship_to_country=" + meta.x_ship_to_country +
-            ",x_ship_to_state=" + meta.x_ship_to_state +
-            ",x_ship_to_city=" + meta.x_ship_to_city +
-            ",x_ship_to_zip=" + meta.x_ship_to_zip +
-            ",x_freight=" + meta.x_freight +
-            ",x_platform=" + meta.x_platform +
-            ",x_version=" + meta.x_version +
+        const datalist = "response_code=" + asString(response_code, '') +
+            ",x_test_mode=" + asString(meta.x_test_mode, '') +
+            ",x_shopid=" + asString(meta.x_shopid, '') +
+            ",x_amount=" + asString(meta.x_amount, '') +
+            ",x_order_id=" + asString(meta.x_order_id, '') +
+            ",x_response_url=" + asString(meta.x_response_url, '') +
+            ",x_first_name=" + asString(meta.x_first_name, '') +
+            ",x_last_name=" + asString(meta.x_last_name, '') +
+            ",x_company=" + asString(meta.x_company, '') +
+            ",x_address=" + asString(meta.x_address, '') +
+            ",x_country=" + asString(meta.x_country, '') +
+            ",x_state=" + asString(meta.x_state, '') +
+            ",x_city=" + asString(meta.x_city, '') +
+            ",x_zip=" + asString(meta.x_zip, '') +
+            ",x_phone=" + asString(meta.x_phone, '') +
+            ",x_email=" + asString(meta.x_email, '') +
+            ",x_ship_to_first_name=" + asString(meta.x_ship_to_first_name, '') +
+            ",x_ship_to_last_name=" + asString(meta.x_ship_to_last_name, '') +
+            ",x_ship_to_company=" + asString(meta.x_ship_to_company, '') +
+            ",x_ship_to_address=" + asString(meta.x_ship_to_address, '') +
+            ",x_ship_to_country=" + asString(meta.x_ship_to_country, '') +
+            ",x_ship_to_state=" + asString(meta.x_ship_to_state, '') +
+            ",x_ship_to_city=" + asString(meta.x_ship_to_city, '') +
+            ",x_ship_to_zip=" + asString(meta.x_ship_to_zip, '') +
+            ",x_freight=" + asString(meta.x_freight, '') +
+            ",x_platform=" + asString(meta.x_platform, '') +
+            ",x_version" + asString(meta.x_version, '') +
             ",signed_field_names=" + 
             "response_code,x_test_mode,x_shopid,x_amount,x_order_id,x_response_url,x_first_name,x_last_name,x_company,x_address,x_country,x_state,x_city,x_zip,x_phone,x_email,x_ship_to_first_name,x_ship_to_last_name,x_ship_to_company,x_ship_to_address,x_ship_to_country,x_ship_to_state,x_ship_to_city,x_ship_to_zip,x_freight,x_platform,x_version,signed_field_names";
 
