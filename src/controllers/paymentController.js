@@ -44,6 +44,7 @@ const WEBXPAY_ENCRYPTION_PADDING = getWebxpayPadding();
 const PAYZY_SECRET_KEY = process.env.PAYZY_SECRET_KEY || 'dummy_secret';
 const PAYZY_SHOP_ID = process.env.PAYZY_SHOP_ID || 'dummy_shop_id';
 const PAYZY_TEST_MODE = process.env.PAYZY_TEST_MODE || 'on';
+const PAYZY_API_BASE_URL = String(process.env.PAYZY_API_BASE_URL || 'https://api.payzy.lk').replace(/\/+$/, '');
 
 if (!WEBXPAY_SECRET_KEY) {
   logger.error('WEBXPAY_SECRET_KEY is not set in environment variables!');
@@ -362,7 +363,7 @@ exports.generatePayzyPayload = async (req, res, next) => {
         };
 
         const axios = require('axios');
-        const response = await axios.post("https://api.payzy.lk/checkout/custom-checkout", payload, {
+        const response = await axios.post(`${PAYZY_API_BASE_URL}/checkout/custom-checkout`, payload, {
             timeout: 20000,
             headers: {
                 'Content-Type': 'application/json'
