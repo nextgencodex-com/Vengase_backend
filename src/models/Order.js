@@ -208,8 +208,13 @@ class Order {
 
       snapshot.forEach(doc => {
         const order = doc.data();
+        const paymentStatus = String(order.paymentStatus || '').trim().toLowerCase();
         totalOrders++;
-        totalRevenue += order.totalAmount;
+
+        // Revenue only counts orders with successful completed payments.
+        if (paymentStatus === 'completed') {
+          totalRevenue += Number(order.totalAmount || 0);
+        }
 
         if (order.orderStatus === 'pending' || order.orderStatus === 'confirmed') {
           pendingOrders++;
