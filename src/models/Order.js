@@ -211,8 +211,8 @@ class Order {
         const paymentStatus = String(order.paymentStatus || '').trim().toLowerCase();
         totalOrders++;
 
-        // Revenue only counts orders with successful completed payments.
-        if (paymentStatus === 'completed') {
+        // Revenue counts orders that were successfully paid, regardless of gateway label.
+        if (['completed', 'paid'].includes(paymentStatus)) {
           totalRevenue += Number(order.totalAmount || 0);
         }
 
