@@ -446,6 +446,8 @@ const getAllUsers = async (req, res, next) => {
       const userIdKey = order.userId || null;
       const userEmailKey = order.userEmail ? String(order.userEmail).trim().toLowerCase() : null;
       const orderTotal = Number(order.totalAmount ?? order.total ?? order.grandTotal ?? 0);
+      const paymentStatus = String(order.paymentStatus || '').trim().toLowerCase();
+      const isPaidOrder = paymentStatus === 'paid' || paymentStatus === 'completed';
 
       if (!userIdKey && !userEmailKey) return;
 
@@ -457,7 +459,9 @@ const getAllUsers = async (req, res, next) => {
         };
 
         existing.orderCount += 1;
-        existing.totalSpent += orderTotal;
+        if (isPaidOrder) {
+          existing.totalSpent += orderTotal;
+        }
         orderSummaryByUser.set(key, existing);
       });
     });
