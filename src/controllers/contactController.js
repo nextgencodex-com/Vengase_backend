@@ -136,51 +136,6 @@ const sendContactEmail = async (req, res, next) => {
       `
     }, fromEmail, fallbackFromEmail);
 
-    // Send confirmation to user (non-critical path)
-    try {
-      await sendWithFallbackFrom({
-        to: email,
-        subject: 'We received your message - VENGASE',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="background-color: #000; color: #fff; padding: 20px; border-radius: 8px; text-align: center; margin-bottom: 20px;">
-              <h2 style="margin: 0; font-size: 24px;">VENGASE</h2>
-            </div>
-            
-            <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px;">
-              <h3 style="color: #000; margin-top: 0;">Thank you for contacting us, ${name}!</h3>
-              
-              <p style="color: #333; line-height: 1.6;">
-                We have received your message and appreciate you reaching out to VENGASE. Our team will review your inquiry and get back to you as soon as possible, typically within 24-48 hours.
-              </p>
-
-              <div style="background-color: #fff; padding: 15px; border-left: 4px solid #000; margin: 20px 0;">
-                <p style="margin: 0 0 5px 0; color: #666; font-size: 12px; text-transform: uppercase;">Your Message</p>
-                <p style="margin: 0; color: #333; font-weight: bold;">${subject}</p>
-              </div>
-
-              <p style="color: #666; font-size: 14px; margin-top: 20px;">
-                If you have any urgent matters, feel free to contact us directly at:<br>
-                <strong>+94 777 329 692</strong> (WhatsApp Available)<br>
-                <strong>support@vengase.com</strong>
-              </p>
-
-              <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; text-align: center;">
-                <p style="color: #999; font-size: 12px; margin: 0;">
-                  Follow us on social media<br>
-                  <a href="https://www.facebook.com/share/17PPiVtRwU/" style="color: #0066cc; margin: 0 10px;">Facebook</a> | 
-                  <a href="https://www.instagram.com/wevengase_?igsh=aWM5b28ybmZ1M3Rl" style="color: #0066cc; margin: 0 10px;">Instagram</a> | 
-                  <a href="https://www.tiktok.com/@we_vengase?_r=1&_t=ZS-958ml0XGqGH" style="color: #0066cc; margin: 0 10px;">TikTok</a>
-                </p>
-              </div>
-            </div>
-          </div>
-        `
-      }, fromEmail, fallbackFromEmail);
-    } catch (confirmError) {
-      logger.warn(`Contact confirmation email failed for ${email}: ${confirmError.message}`);
-    }
-
     logger.info(
       `Contact form admin email sent from ${email} with subject: ${subject}. Sender used: ${adminSend.usedFrom}`
     );
