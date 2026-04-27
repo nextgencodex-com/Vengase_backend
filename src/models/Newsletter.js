@@ -20,7 +20,7 @@ class Newsletter {
   }
 
   // Subscribe email to newsletter
-  async subscribe(email) {
+  async subscribe(email, phone = null) {
     try {
       const normalizedEmail = String(email || '').trim().toLowerCase();
       const docId = this.getDocIdFromEmail(normalizedEmail);
@@ -28,6 +28,10 @@ class Newsletter {
       const existingDoc = await docRef.get();
 
       if (existingDoc.exists) {
+        // If phone is provided and differs, update it
+        if (phone && phone !== existingDoc.data().phone) {
+          await docRef.update({ phone, updatedAt: new Date() });
+        }
         return {
           success: false,
           message: 'Email already subscribed to newsletter',
@@ -42,6 +46,10 @@ class Newsletter {
         updatedAt: new Date(),
         status: 'Active'
       };
+
+      if (phone) {
+        newSubscription.phone = phone;
+      }
 
       await docRef.set(newSubscription);
 
@@ -169,6 +177,7 @@ class Newsletter {
       const subscriptions = await this.getAll();
       return subscriptions.map(sub => ({
         Email: sub.email,
+        Phone: sub.phone || '',
         'Subscribed Date': sub.subscribedAt ? new Date(sub.subscribedAt.toDate()).toLocaleDateString() : '',
         Status: sub.status
       }));
