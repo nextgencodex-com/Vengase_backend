@@ -7,6 +7,7 @@ const newsletter = new Newsletter();
 const subscribe = async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim();
+    const phone = String(req.body?.phone || '').trim() || null;
 
     // Validate email
     if (!email) {
@@ -19,7 +20,7 @@ const subscribe = async (req, res, next) => {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    const result = await newsletter.subscribe(email);
+    const result = await newsletter.subscribe(email, phone);
 
     if (!result.success) {
       return res.status(400).json({ 
