@@ -67,9 +67,11 @@ const createOrder = async (req, res, next) => {
       const codOrderId = order.orderId || order.id;
       logger.info(`COD order detected. Triggering confirmation emails for order ${codOrderId}.`);
       // Run email sending asynchronously so it doesn't block the response
-      sendOrderConfirmationEmails(codOrderId).catch(err => {
+      try {
+        await sendOrderConfirmationEmails(codOrderId);
+      } catch (err) {
         logger.error(`COD email send failed for order ${codOrderId}: ${err?.message || err}`);
-      });
+      }
     } else {
       logger.info(`Order ${order.orderId} created with payment method '${orderData.paymentMethod}'. Email will be sent after payment confirmation.`);
     }
