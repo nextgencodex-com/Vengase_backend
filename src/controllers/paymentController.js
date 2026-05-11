@@ -257,8 +257,12 @@ exports.paymentCallback = async (req, res, next) => {
                 logger.info(`Order ${orderId} payment marked as PAID and CONFIRMED`);
                 redirectResult = 'success';
                 
-                // Send confirmation email asynchronously
-                sendOrderConfirmationEmails(orderId).catch(err => logger.error(err));
+                // Send confirmation email
+                try {
+                    await sendOrderConfirmationEmails(orderId);
+                } catch (err) {
+                    logger.error(err);
+                }
             } else {
                 await Order.updatePaymentStatus(orderId, 'failed');
                 logger.info(`Order ${orderId} payment marked as FAILED (statusCode=${statusCode})`);
@@ -503,8 +507,12 @@ exports.verifyPayzyPayment = async (req, res, next) => {
                 await Order.updateOrderStatus(normalizedOrderId, 'confirmed');
                 logger.info(`Payzy Order ${normalizedOrderId} payment marked as PAID and CONFIRMED`);
                 
-                // Send confirmation email asynchronously
-                sendOrderConfirmationEmails(normalizedOrderId).catch(err => logger.error(err));
+                // Send confirmation email
+                try {
+                    await sendOrderConfirmationEmails(normalizedOrderId);
+                } catch (err) {
+                    logger.error(err);
+                }
                 
                 return res.status(200).json({ success: true, payment_status: 'paid' });
             } else {
