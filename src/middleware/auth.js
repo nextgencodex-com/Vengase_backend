@@ -52,11 +52,7 @@ const requireAdmin = async (req, res, next) => {
 
     // List of known admin emails (fallback)
     const ADMIN_EMAILS = [
-      'admin@vengase.com',
-      'test@admin.vengase.com',
-      'himsara@admin.vengase.com',
-      'wevengase@gmail.com',
-      'adminnew@vengase.com'
+      'admin@vengase.com'
     ];
 
     // Check if user has admin custom claims OR is in admin email list
