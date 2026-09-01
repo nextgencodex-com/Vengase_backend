@@ -3,7 +3,7 @@ const Joi = require('joi');
 const orderSchema = Joi.object({
   userEmail: Joi.string().email().required(),
   userName: Joi.string().required().min(2).max(100),
-  phone: Joi.string().required().min(10).max(15),
+  phone: Joi.string().required().min(7).max(25),
   items: Joi.array().items(Joi.object({
     productId: Joi.any().required(),
     name: Joi.string().required(),

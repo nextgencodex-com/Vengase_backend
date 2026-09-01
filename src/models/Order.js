@@ -136,9 +136,43 @@ class Order {
     }
   }
 
-  async findByUserId(userId) {
+  async findByUserId(userId, userEmail = null) {
     try {
-      return await this.findAll({ userId });
+      const db = getFirestore();
+      const ordersMap = new Map();
+
+      if (userId) {
+        try {
+          const snapshot1 = await db.collection(this.collection).where('userId', '==', userId).get();
+          snapshot1.forEach(doc => {
+            const data = doc.data();
+            ordersMap.set(data.orderId || doc.id, data);
+          });
+        } catch (e) {
+          logger.warn(`Error querying orders by userId: ${e.message}`);
+        }
+      }
+
+      if (userEmail) {
+        try {
+          const snapshot2 = await db.collection(this.collection).where('userEmail', '==', userEmail).get();
+          snapshot2.forEach(doc => {
+            const data = doc.data();
+            ordersMap.set(data.orderId || doc.id, data);
+          });
+        } catch (e) {
+          logger.warn(`Error querying orders by userEmail: ${e.message}`);
+        }
+      }
+
+      const orders = Array.from(ordersMap.values());
+      orders.sort((a, b) => {
+        const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+        const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+        return dateB - dateA;
+      });
+
+      return orders;
     } catch (error) {
       logger.error('Error finding orders by user ID:', error);
       throw error;

@@ -143,16 +143,17 @@ const getOrderById = async (req, res, next) => {
 const getUserOrders = async (req, res, next) => {
   try {
     const userId = req.params.userId;
+    const userEmail = req.user?.email || req.query?.email;
 
     // Check if user is admin or requesting their own orders
-    if (!req.user?.isAdmin && req.user?.uid !== userId) {
+    if (!req.user?.isAdmin && !req.user?.admin && req.user?.uid !== userId && req.user?.email !== userId) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to view these orders'
       });
     }
 
-    const orders = await Order.findByUserId(userId);
+    const orders = await Order.findByUserId(userId, userEmail);
 
     res.status(200).json({
       success: true,
