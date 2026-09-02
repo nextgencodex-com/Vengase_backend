@@ -38,10 +38,8 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
 
-if (process.env.NODE_ENV === 'production') {
-  const trustProxy = process.env.TRUST_PROXY;
-  app.set('trust proxy', trustProxy ? trustProxy : 1);
-}
+// Trust proxy unconditionally for accurate client IP resolution behind load balancers/CDNs
+app.set('trust proxy', process.env.TRUST_PROXY || 1);
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
@@ -85,17 +83,26 @@ app.use(cors(corsOptions));
 // Handle CORS preflight across all routes.
 app.options('*', cors(corsOptions));
 
-// Rate limiting (disabled for development). Limit API traffic only.
+// Rate limiting: Protect sensitive operations while allowing seamless product catalog browsing
 const apiLimiter = rateLimit({
   windowMs: Number(process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 10000),
-  message: 'Too many requests from this IP, please try again later.',
+  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 50000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many requests from this IP, please try again later.'
+  },
   skip: (req) => (
     req.method === 'OPTIONS' ||
     req.originalUrl === '/health' ||
     req.originalUrl.startsWith('/images') ||
     req.originalUrl.startsWith('/uploads') ||
-    req.path === '/products/new-arrivals'
+    (req.method === 'GET' && (
+      req.originalUrl.includes('/products') ||
+      req.originalUrl.includes('/categories') ||
+      req.originalUrl.includes('/promo-codes')
+    ))
   ),
 });
 
@@ -118,6 +125,15 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     environment: process.env.NODE_ENV
   });
+});
+
+// Prevent browser, proxy, and CDN caching of dynamic API and private data responses
+app.use('/api/v1', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.set('Surrogate-Control', 'no-store');
+  next();
 });
 
 // API Routes
