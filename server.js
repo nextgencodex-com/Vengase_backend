@@ -101,7 +101,10 @@ const apiLimiter = rateLimit({
     (req.method === 'GET' && (
       req.originalUrl.includes('/products') ||
       req.originalUrl.includes('/categories') ||
-      req.originalUrl.includes('/promo-codes')
+      req.originalUrl.includes('/promo-codes') ||
+      req.originalUrl.includes('/auth') ||
+      req.originalUrl.includes('/orders') ||
+      req.originalUrl.includes('/admin')
     ))
   ),
 });
