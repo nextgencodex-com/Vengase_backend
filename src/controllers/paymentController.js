@@ -41,9 +41,9 @@ const WEBXPAY_PUBLIC_KEY = normalizePemKey(process.env.WEBXPAY_PUBLIC_KEY);
 const WEBXPAY_CHECKOUT_URL = process.env.WEBXPAY_CHECKOUT_URL || 'https://webxpay.com/index.php?route=checkout/billing';
 const WEBXPAY_ENCRYPTION_PADDING = getWebxpayPadding();
 
-const PAYZY_SECRET_KEY = process.env.PAYZY_SECRET_KEY || 'dummy_secret';
-const PAYZY_SHOP_ID = process.env.PAYZY_SHOP_ID || 'dummy_shop_id';
-const PAYZY_TEST_MODE = process.env.PAYZY_TEST_MODE || 'on';
+const PAYZY_SECRET_KEY = process.env.PAYZY_SECRET_KEY || '';
+const PAYZY_SHOP_ID = process.env.PAYZY_SHOP_ID || '';
+const PAYZY_TEST_MODE = process.env.PAYZY_TEST_MODE || 'off';
 const PAYZY_API_BASE_URL = String(process.env.PAYZY_API_BASE_URL || 'https://api.payzy.lk').replace(/\/+$/, '');
 
 const getByPath = (obj, path) => path.reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
@@ -93,7 +93,7 @@ if (WEBXPAY_PUBLIC_KEY) {
     }
 }
 if (!process.env.PAYZY_SECRET_KEY) {
-  logger.warn('PAYZY_SECRET_KEY is not set in environment variables! Using dummy key.');
+  logger.warn('PAYZY_SECRET_KEY is not set in environment variables!');
 }
 
 exports.generatePaymentPayload = async (req, res, next) => {
@@ -287,6 +287,11 @@ exports.generatePayzyPayload = async (req, res, next) => {
         const { orderId, amount, customerDetails } = req.body;
         const customer = customerDetails || {};
         const asString = (value, fallback = '') => String(value ?? fallback).trim();
+
+        if (!PAYZY_SECRET_KEY || !PAYZY_SHOP_ID) {
+            logger.error('Payzy configuration missing in environment variables!');
+            return res.status(500).json({ success: false, error: 'Payzy payment gateway is not properly configured.' });
+        }
 
         if (!orderId) {
             return res.status(400).json({ success: false, error: 'Missing orderId' });
@@ -527,5 +532,316 @@ exports.verifyPayzyPayment = async (req, res, next) => {
     } catch (error) {
         logger.error('Error in verifyPayzyPayment:', error);
         res.status(500).json({ success: false, error: 'Payment verification failed' });
+    }
+};
+
+const getMintpayConfig = () => {
+    return {
+        merchantId: String(process.env.MINTPAY_MERCHANT_ID || '').trim(),
+        apiToken: String(process.env.MINTPAY_API_TOKEN || '').trim(),
+        baseUrl: String(process.env.MINTPAY_API_BASE_URL || 'https://app.mintpay.lk').trim().replace(/\/+$/, '')
+    };
+};
+
+const formatMintpayDate = (d = new Date()) => {
+    const date = d instanceof Date ? d : new Date(d);
+    const validDate = isNaN(date.getTime()) ? new Date() : date;
+    const pad = (n) => String(n).padStart(2, '0');
+    const YYYY = validDate.getFullYear();
+    const MM = pad(validDate.getMonth() + 1);
+    const DD = pad(validDate.getDate());
+    const HH = pad(validDate.getHours());
+    const mm = pad(validDate.getMinutes());
+    const ss = pad(validDate.getSeconds());
+    return `${YYYY}-${MM}-${DD} ${HH}:${mm}:${ss}`;
+};
+
+const extractMintpayErrorMessage = (data) => {
+    if (!data) return null;
+    if (data.errors && typeof data.errors === 'object') {
+        const errParts = [];
+        for (const [field, val] of Object.entries(data.errors)) {
+            if (Array.isArray(val)) {
+                errParts.push(`${field}: ${val.map(v => typeof v === 'object' ? JSON.stringify(v) : v).join(', ')}`);
+            } else if (typeof val === 'object') {
+                errParts.push(`${field}: ${JSON.stringify(val)}`);
+            } else {
+                errParts.push(`${field}: ${val}`);
+            }
+        }
+        if (errParts.length > 0) {
+            return errParts.join('; ');
+        }
+    }
+    if (data.message && data.message !== 'client side error') {
+        return data.message;
+    }
+    if (data.data && typeof data.data === 'string') {
+        return data.data;
+    }
+    return data.error || data.message || null;
+};
+
+// --- MINTPAY INTEGRATION ---
+
+exports.generateMintpayPayload = async (req, res, next) => {
+    try {
+        const { orderId, amount, customerDetails, items } = req.body;
+        const customer = customerDetails || {};
+        const asCleanString = (value, fallback = '') => {
+            const s = String(value ?? '').trim();
+            return s.length > 0 ? s : fallback;
+        };
+        const config = getMintpayConfig();
+
+        if (!config.merchantId || !config.apiToken) {
+            logger.error('Mintpay config missing: MINTPAY_MERCHANT_ID and MINTPAY_API_TOKEN must be configured in .env');
+            return res.status(500).json({
+                success: false,
+                error: 'Mintpay payment gateway is not properly configured on server.'
+            });
+        }
+
+        if (!orderId) {
+            return res.status(400).json({ success: false, error: 'Missing orderId' });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found' });
+        }
+
+        const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const orderTotal = Number(order.totalAmount);
+        const requestedAmount = Number(amount);
+        const effectiveAmount = Number.isFinite(orderTotal) && orderTotal > 0
+            ? orderTotal
+            : requestedAmount;
+
+        if (!Number.isFinite(effectiveAmount) || effectiveAmount <= 0) {
+            logger.warn(`Mintpay payload rejected for order ${orderId}: invalid amount`);
+            return res.status(400).json({ success: false, error: 'Invalid order amount for Mintpay' });
+        }
+
+        // Get customer IP address
+        const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1';
+        const clientIp = rawIp.replace(/^.*:/, '') || '127.0.0.1';
+
+        // Clean customer telephone
+        const rawPhone = customer.contact || order.phone || '0770000000';
+        let cleanPhone = String(rawPhone).replace(/[^0-9]/g, '');
+        if (cleanPhone.startsWith('94') && cleanPhone.length > 9) {
+            cleanPhone = '0' + cleanPhone.slice(2);
+        } else if (!cleanPhone.startsWith('0') && cleanPhone.length === 9) {
+            cleanPhone = '0' + cleanPhone;
+        }
+        if (!cleanPhone || cleanPhone.length < 9) {
+            cleanPhone = '0770000000';
+        }
+
+        // Validate and clean email
+        const rawEmail = asCleanString(customer.email || order.userEmail, 'customer@vengase.com');
+        const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail);
+        const customerEmail = isValidEmail ? rawEmail : 'customer@vengase.com';
+
+        const nowFormatted = formatMintpayDate(new Date());
+        const orderCreatedDate = order.createdAt?._seconds || order.createdAt?.seconds
+            ? formatMintpayDate(new Date((order.createdAt._seconds || order.createdAt.seconds) * 1000))
+            : (order.createdAt ? formatMintpayDate(new Date(order.createdAt)) : nowFormatted);
+
+        // Format order products
+        const orderItems = (Array.isArray(items) && items.length > 0) ? items : (order.items || []);
+        const formattedProducts = orderItems.map((item, idx) => {
+            const rawPrice = Number(item.price);
+            const itemPrice = (Number.isFinite(rawPrice) && rawPrice > 0) ? rawPrice : 1;
+            const itemQuantity = Math.max(1, parseInt(item.quantity, 10) || 1);
+            return {
+                name: asCleanString(item.name, `Product ${idx + 1}`),
+                product_id: asCleanString(item.productId || item.id || item._id, `PROD-${idx + 1}`),
+                sku: asCleanString(item.size || item.sku, 'standard'),
+                quantity: itemQuantity,
+                unit_price: itemPrice.toFixed(4),
+                created_date: nowFormatted,
+                updated_date: nowFormatted
+            };
+        });
+
+        // If no products found, create a fallback product
+        if (formattedProducts.length === 0) {
+            formattedProducts.push({
+                name: `Order #${orderId}`,
+                product_id: String(orderId),
+                sku: 'standard',
+                quantity: 1,
+                unit_price: effectiveAmount.toFixed(4),
+                created_date: nowFormatted,
+                updated_date: nowFormatted
+            });
+        }
+
+        const mintpayPayload = {
+            merchant_id: config.merchantId,
+            order_id: String(orderId),
+            total_price: effectiveAmount.toFixed(4),
+            channel: 'ONL',
+            checkout_option: 'WEB',
+            customer_email: customerEmail,
+            customer_telephone: cleanPhone,
+            ip: clientIp,
+            x_forwarded_for: clientIp,
+            delivery_street: asCleanString(customer.address || order.shippingAddress?.address, 'Street Address'),
+            delivery_region: asCleanString(customer.city || order.shippingAddress?.city, 'Colombo'),
+            delivery_postcode: asCleanString(customer.postalCode || order.shippingAddress?.postalCode, '00000'),
+            cart_created_date: orderCreatedDate,
+            cart_updated_date: nowFormatted,
+            success_url: `${FRONTEND_URL}/?payment=mintpay-callback&status=success&order_id=${encodeURIComponent(orderId)}`,
+            fail_url: `${FRONTEND_URL}/?payment=mintpay-callback&status=failed&order_id=${encodeURIComponent(orderId)}`,
+            products: formattedProducts
+        };
+
+        logger.info(`[Mintpay] Sending order submission for order ${orderId}, total: ${mintpayPayload.total_price}, target: ${config.baseUrl}`);
+
+        const axios = require('axios');
+        const response = await axios.post(`${config.baseUrl}/api/v2/purchase/merchant-gateway/`, mintpayPayload, {
+            timeout: 20000,
+            headers: {
+                'Authorization': `Token ${config.apiToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const responseData = response?.data;
+        const purchaseId = responseData?.data?.uid || responseData?.data?.id;
+        const checkoutLink = responseData?.data?.checkout_link;
+
+        if (checkoutLink) {
+            logger.info(`[Mintpay] Order submission success for ${orderId}, purchaseId: ${purchaseId}, checkout: ${checkoutLink}`);
+
+            // Persist paymentMeta in Firestore order
+            try {
+                const { getFirestore } = require('../../config/firebase');
+                const db = getFirestore();
+                await db.collection('orders').doc(orderId).update({
+                    paymentMeta: {
+                        mintpay_purchase_id: purchaseId,
+                        merchant_id: config.merchantId,
+                        submitted_at: new Date()
+                    }
+                });
+            } catch (metaErr) {
+                logger.warn(`Could not persist Mintpay paymentMeta for order ${orderId}: ${metaErr.message}`);
+            }
+
+            return res.status(200).json({
+                success: true,
+                url: checkoutLink,
+                purchase_id: purchaseId,
+                order_id: orderId
+            });
+        } else {
+            logger.error('[Mintpay] Order Submission response missing checkout_link:', responseData);
+            throw new Error(responseData?.message || 'Invalid response from Mintpay API');
+        }
+    } catch (error) {
+        const upstreamError = extractMintpayErrorMessage(error?.response?.data);
+        const upstreamMessage = upstreamError || error?.message || 'Mintpay payment setup failed';
+
+        logger.error('[Mintpay] Error in generateMintpayPayload:', {
+            message: error?.message,
+            code: error?.code,
+            status: error?.response?.status,
+            data: error?.response?.data,
+            parsedError: upstreamMessage
+        });
+
+        res.status(500).json({ success: false, error: upstreamMessage });
+    }
+};
+
+exports.verifyMintpayPayment = async (req, res, next) => {
+    try {
+        const { order_id, purchase_id } = req.body;
+        const normalizedOrderId = normalizeOrderId(order_id);
+        const config = getMintpayConfig();
+
+        if (!config.merchantId || !config.apiToken) {
+            logger.error('Mintpay config missing for verification: MINTPAY_MERCHANT_ID and MINTPAY_API_TOKEN must be configured in .env');
+            return res.status(500).json({ success: false, error: 'Mintpay payment gateway is not properly configured on server.' });
+        }
+
+        let resolvedPurchaseId = purchase_id;
+
+        // If purchase_id not provided in body, check Firestore order document
+        if (!resolvedPurchaseId && normalizedOrderId) {
+            const { getFirestore } = require('../../config/firebase');
+            const db = getFirestore();
+            const orderDoc = await db.collection('orders').doc(normalizedOrderId).get();
+            if (orderDoc.exists) {
+                const orderData = orderDoc.data();
+                resolvedPurchaseId = orderData.paymentMeta?.mintpay_purchase_id;
+            }
+        }
+
+        if (!resolvedPurchaseId) {
+            return res.status(400).json({ success: false, error: 'Missing purchase_id for Mintpay verification' });
+        }
+
+        logger.info(`[Mintpay] Verifying payment for order ${normalizedOrderId}, purchaseId: ${resolvedPurchaseId}`);
+
+        const axios = require('axios');
+        const statusResponse = await axios.get(`${config.baseUrl}/api/v2/purchase/merchant-gateway/status-purchase`, {
+            params: {
+                merchant_id: config.merchantId,
+                purchase_id: resolvedPurchaseId
+            },
+            headers: {
+                'Authorization': `Token ${config.apiToken}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 20000
+        });
+
+        const statusData = statusResponse?.data;
+        const paymentStatusResult = statusData?.data?.status; // e.g. "Approved" or "Rejected"
+        logger.info(`[Mintpay] Status response for purchase ${resolvedPurchaseId}: status=${paymentStatusResult}`, statusData);
+
+        if (paymentStatusResult === 'Approved') {
+            if (normalizedOrderId) {
+                await Order.updatePaymentStatus(normalizedOrderId, 'paid');
+                await Order.updateOrderStatus(normalizedOrderId, 'confirmed');
+                logger.info(`Mintpay Order ${normalizedOrderId} payment marked as PAID and CONFIRMED`);
+
+                // Send confirmation email
+                try {
+                    await sendOrderConfirmationEmails(normalizedOrderId);
+                } catch (err) {
+                    logger.error('[Mintpay] Error sending confirmation email:', err);
+                }
+            }
+
+            return res.status(200).json({
+                success: true,
+                payment_status: 'paid',
+                data: statusData?.data
+            });
+        } else {
+            if (normalizedOrderId) {
+                await Order.updatePaymentStatus(normalizedOrderId, 'failed');
+                logger.info(`Mintpay Order ${normalizedOrderId} payment marked as FAILED (status=${paymentStatusResult})`);
+            }
+
+            return res.status(200).json({
+                success: true,
+                payment_status: 'failed',
+                data: statusData?.data
+            });
+        }
+    } catch (error) {
+        logger.error('[Mintpay] Error in verifyMintpayPayment:', {
+            message: error?.message,
+            status: error?.response?.status,
+            data: error?.response?.data
+        });
+        res.status(500).json({ success: false, error: 'Mintpay payment verification failed' });
     }
 };

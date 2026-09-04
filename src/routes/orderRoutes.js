@@ -7,7 +7,8 @@ const {
   getUserOrders,
   updateOrderStatus,
   updatePaymentStatus,
-  getOrderStats
+  getOrderStats,
+  deleteOrder
 } = require('../controllers/orderController');
 const {
   validateOrder,
@@ -28,5 +29,6 @@ router.get('/', authenticateToken, isAdmin, getAllOrders);
 router.get('/stats/overview', authenticateToken, isAdmin, getOrderStats);
 router.patch('/:orderId/status', authenticateToken, isAdmin, validateOrderStatusUpdate, updateOrderStatus);
 router.patch('/:orderId/payment', authenticateToken, isAdmin, validatePaymentStatusUpdate, updatePaymentStatus);
+router.delete('/:orderId', authenticateToken, isAdmin, deleteOrder);
 
 module.exports = router;

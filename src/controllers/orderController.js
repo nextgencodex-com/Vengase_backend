@@ -236,6 +236,22 @@ const getOrderStats = async (req, res, next) => {
   }
 };
 
+// Delete order (admin only)
+const deleteOrder = async (req, res, next) => {
+  try {
+    const { orderId } = req.params;
+    await Order.delete(orderId);
+
+    res.status(200).json({
+      success: true,
+      message: `Order ${orderId} deleted successfully`
+    });
+  } catch (error) {
+    logger.error('Error in deleteOrder:', error);
+    next(error);
+  }
+};
+
 module.exports = {
   createOrder,
   getAllOrders,
@@ -243,5 +259,6 @@ module.exports = {
   getUserOrders,
   updateOrderStatus,
   updatePaymentStatus,
-  getOrderStats
+  getOrderStats,
+  deleteOrder
 };

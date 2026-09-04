@@ -13,4 +13,8 @@ router.get('/callback', paymentController.paymentCallback);
 router.post('/payzy/generate', paymentController.generatePayzyPayload);
 router.post('/payzy/verify', paymentController.verifyPayzyPayment);
 
+// Mintpay endpoints
+router.post('/mintpay/generate', paymentController.generateMintpayPayload);
+router.post('/mintpay/verify', paymentController.verifyMintpayPayment);
+
 module.exports = router;

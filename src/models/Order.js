@@ -271,6 +271,23 @@ class Order {
       throw error;
     }
   }
+
+  async delete(orderId) {
+    try {
+      const db = getFirestore();
+      const orderRef = db.collection(this.collection).doc(orderId);
+      const doc = await orderRef.get();
+      if (!doc.exists) {
+        throw new Error('Order not found');
+      }
+      await orderRef.delete();
+      logger.info(`Order ${orderId} deleted successfully`);
+      return true;
+    } catch (error) {
+      logger.error('Error deleting order:', error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new Order();
