@@ -711,7 +711,7 @@ exports.generateMintpayPayload = async (req, res, next) => {
         });
 
         const responseData = response?.data;
-        const purchaseId = responseData?.data?.uid || responseData?.data?.id;
+        const purchaseId = responseData?.data?.id || responseData?.data?.uid;
         const checkoutLink = responseData?.data?.checkout_link;
 
         if (checkoutLink) {
