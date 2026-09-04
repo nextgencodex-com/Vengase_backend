@@ -115,19 +115,34 @@ class Order {
         query = query.where('userId', '==', filters.userId);
       }
 
-      // Order by creation date (most recent first)
-      query = query.orderBy('createdAt', 'desc');
-
-      if (filters.limit) {
-        query = query.limit(parseInt(filters.limit));
+      let snapshot;
+      try {
+        // Order by creation date (most recent first)
+        let orderedQuery = query.orderBy('createdAt', 'desc');
+        if (filters.limit) {
+          orderedQuery = orderedQuery.limit(parseInt(filters.limit));
+        }
+        snapshot = await orderedQuery.get();
+      } catch (indexError) {
+        logger.warn('Query with orderBy failed, falling back to memory sort:', indexError.message);
+        snapshot = await query.get();
       }
 
-      const snapshot = await query.get();
       const orders = [];
-      
       snapshot.forEach(doc => {
         orders.push(doc.data());
       });
+
+      // In-memory sort fallback to ensure newest orders first
+      orders.sort((a, b) => {
+        const timeA = a.createdAt?._seconds ? a.createdAt._seconds * 1000 : (a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime());
+        const timeB = b.createdAt?._seconds ? b.createdAt._seconds * 1000 : (b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime());
+        return timeB - timeA;
+      });
+
+      if (filters.limit && orders.length > parseInt(filters.limit)) {
+        return orders.slice(0, parseInt(filters.limit));
+      }
 
       return orders;
     } catch (error) {
