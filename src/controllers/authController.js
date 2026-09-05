@@ -468,24 +468,42 @@ const getAllUsers = async (req, res, next) => {
 
     const mergedProfiles = new Map();
 
+    const hardcodedAdminEmails = ['admin@vengase.com', 'test@admin.vengase.com', 'himsara@admin.vengase.com'];
+
     users.forEach((profile) => {
-      if (profile?.uid) {
-        mergedProfiles.set(profile.uid, {
+      const uid = profile?.uid || profile?.id;
+      if (uid) {
+        const email = String(profile.email || '').trim().toLowerCase();
+        const isAdmin = hardcodedAdminEmails.includes(email);
+        mergedProfiles.set(uid, {
           ...profile,
-          role: 'customer',
+          uid,
+          role: isAdmin ? 'admin' : 'customer',
           source: 'user'
         });
       }
     });
 
     admins.forEach((admin) => {
-      const existing = admin.uid ? mergedProfiles.get(admin.uid) : null;
+      const adminUid = admin.uid || admin.id;
       const normalizedEmail = String(admin.email || '').trim().toLowerCase();
+      
+      let existing = null;
+      if (adminUid && mergedProfiles.has(adminUid)) {
+        existing = mergedProfiles.get(adminUid);
+      } else if (normalizedEmail) {
+        for (const val of mergedProfiles.values()) {
+          if (String(val.email || '').trim().toLowerCase() === normalizedEmail) {
+            existing = val;
+            break;
+          }
+        }
+      }
 
       const merged = {
         ...(existing || {}),
-        uid: admin.uid,
-        email: admin.email,
+        uid: adminUid || existing?.uid || normalizedEmail,
+        email: admin.email || existing?.email,
         displayName: admin.displayName || existing?.displayName || admin.email?.split('@')[0] || 'Admin',
         firstName: admin.firstName || existing?.firstName || '',
         lastName: admin.lastName || existing?.lastName || '',
@@ -497,20 +515,18 @@ const getAllUsers = async (req, res, next) => {
         source: 'admin'
       };
 
-      if (admin.uid) {
-        mergedProfiles.set(admin.uid, merged);
-      }
-
-      if (normalizedEmail && !mergedProfiles.has(normalizedEmail)) {
-        mergedProfiles.set(normalizedEmail, merged);
+      const key = adminUid || existing?.uid || normalizedEmail;
+      if (key) {
+        mergedProfiles.set(key, merged);
       }
     });
 
-    const adminUsers = Array.from(mergedProfiles.values()).filter((profile) => profile?.uid);
+    const adminUsers = Array.from(mergedProfiles.values()).filter((profile) => profile?.uid || profile?.email);
 
     const enrichedUsers = adminUsers.map((profile) => {
       const emailKey = String(profile.email || '').trim().toLowerCase();
-      const orderSummary = orderSummaryByUser.get(profile.uid)
+      const userUid = profile.uid || profile.id || emailKey;
+      const orderSummary = orderSummaryByUser.get(userUid)
         || orderSummaryByUser.get(emailKey)
         || {
           orderCount: Number(profile.orderCount || 0),
@@ -521,12 +537,15 @@ const getAllUsers = async (req, res, next) => {
         || toDateObject(profile.updatedAt)
         || new Date();
 
+      const isAdmin = profile.role === 'admin' || hardcodedAdminEmails.includes(emailKey);
+
       return {
-        uid: profile.uid,
+        uid: userUid,
         email: profile.email,
         displayName: profile.displayName || `${profile.firstName || ''} ${profile.lastName || ''}`.trim() || profile.email?.split('@')[0] || 'User',
         firstName: profile.firstName || '',
         lastName: profile.lastName || '',
+        role: isAdmin ? 'admin' : 'customer',
         emailVerified: true,
         disabled: profile.isActive === false,
         createdAt: createdAtDate.toISOString(),
@@ -535,7 +554,7 @@ const getAllUsers = async (req, res, next) => {
         status: profile.isActive === false ? 'inactive' : 'active',
         orderCount: Number(orderSummary.orderCount || 0),
         totalSpent: Number(orderSummary.totalSpent || 0),
-        customClaims: { admin: profile.role === 'admin' }
+        customClaims: { admin: isAdmin }
       };
     });
 
