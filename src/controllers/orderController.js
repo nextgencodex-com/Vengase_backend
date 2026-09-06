@@ -210,6 +210,16 @@ const updatePaymentStatus = async (req, res, next) => {
 
     const order = await Order.updatePaymentStatus(orderId, normalizedStatus);
 
+    if (normalizedStatus === 'paid' || normalizedStatus === 'completed') {
+      try {
+        const effectiveOrderId = order?.orderId || orderId;
+        await sendOrderConfirmationEmails(effectiveOrderId);
+        logger.info(`Triggered confirmation email for order ${effectiveOrderId} on payment update to ${normalizedStatus}`);
+      } catch (emailErr) {
+        logger.error(`Failed to send confirmation email on payment update for order ${orderId}:`, emailErr);
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: order,

@@ -52,7 +52,7 @@ const buildCustomerOrderTemplate = ({ orderId, customerEmail, items, deliveryFee
             <div style="font-size: 14px; color: #888; padding-top: 4px">QTY: ${escapeHtml(item.quantity || item.units || 1)}</div>
           </td>
           <td style="padding: 24px 4px 0 0; white-space: nowrap">
-            <strong>$${formatCurrency(item.price)}</strong>
+            <strong>LKR ${formatCurrency(item.price)}</strong>
           </td>
         </tr>
       </table>
@@ -114,7 +114,7 @@ const buildCustomerOrderTemplate = ({ orderId, customerEmail, items, deliveryFee
         <tr>
           <td style="width: 60%"></td>
           <td>Delivery Fee</td>
-          <td style="padding: 8px; white-space: nowrap">$${formatCurrency(deliveryFee)}</td>
+          <td style="padding: 8px; white-space: nowrap">LKR ${formatCurrency(deliveryFee)}</td>
         </tr>
         <tr>
           <td style="width: 60%"></td>
@@ -122,7 +122,7 @@ const buildCustomerOrderTemplate = ({ orderId, customerEmail, items, deliveryFee
             <strong style="white-space: nowrap">Order Total</strong>
           </td>
           <td style="padding: 16px 8px; border-top: 2px solid #333; white-space: nowrap">
-            <strong>$${formatCurrency(total)}</strong>
+            <strong>LKR ${formatCurrency(total)}</strong>
           </td>
         </tr>
       </table>
@@ -180,7 +180,7 @@ const sendResendWithFallback = async ({ to, subject, html }) => {
  * - Admin via Resend
  * @param {String} orderId - Order ID
  */
-const sendOrderConfirmationEmails = async (orderId) => {
+const sendOrderConfirmationEmails = async (orderId, options = {}) => {
   try {
     if (!resendApiKey && !EMAILJS_SERVICE_ID) {
       logger.error('Neither Resend nor EmailJS are fully configured. Email sending skipped.');
@@ -198,14 +198,30 @@ const sendOrderConfirmationEmails = async (orderId) => {
       return;
     }
 
+    if (!options?.force && orderData.confirmationEmailSent) {
+      logger.info(`[EmailService] Order confirmation emails already sent for order ${orderId}. Skipping duplicate.`);
+      return;
+    }
+
     console.log(`[EmailService] Found order data:`, JSON.stringify({
       userEmail: orderData.userEmail, 
       paymentMetaEmail: orderData.paymentMeta?.x_email,
       totalAmount: orderData.totalAmount
     }));
 
-    const customerEmail = orderData.userEmail || orderData.paymentMeta?.x_email;
-    const customerName = orderData.userName || orderData.paymentMeta?.x_first_name || 'Customer';
+    const customerEmail = orderData.userEmail || 
+                          orderData.customerEmail || 
+                          orderData.email ||
+                          orderData.customerDetails?.email ||
+                          orderData.shippingAddress?.email ||
+                          orderData.paymentMeta?.x_email ||
+                          orderData.paymentMeta?.email;
+    const customerName = orderData.userName || 
+                         orderData.customerName ||
+                         orderData.name ||
+                         (orderData.customerDetails ? `${orderData.customerDetails.firstName || ''} ${orderData.customerDetails.lastName || ''}`.trim() : '') ||
+                         (orderData.paymentMeta?.x_first_name ? `${orderData.paymentMeta.x_first_name} ${orderData.paymentMeta.x_last_name || ''}`.trim() : '') ||
+                         'Customer';
     const totalNumeric = Number(orderData.totalAmount || 0);
     const totalAmount = Number.isFinite(totalNumeric) ? `LKR ${totalNumeric.toFixed(2)}` : 'N/A';
     const itemsSubtotal = getItemsSubtotal(orderData.items || []);
@@ -301,64 +317,134 @@ const sendOrderConfirmationEmails = async (orderId) => {
       message: customerHtml
     };
 
-    // Try sending to Customer via EmailJS
-    try {
-      if (customerEmail && customerEmail !== 'customer@example.com') { // Prevent sending to dummy email
-        if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !EMAILJS_PUBLIC_KEY || !EMAILJS_PRIVATE_KEY) {
-          throw new Error('EmailJS is not fully configured. Missing EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY, or EMAILJS_PRIVATE_KEY');
-        }
+    let customerEmailSent = false;
 
-        console.log(`[EmailService] Sending customer email via EmailJS: ${customerEmail}`);
-        const emailJsResponse = await emailjs.send(
+    // 1. Try sending to Customer via EmailJS first
+    if (customerEmail && customerEmail !== 'customer@example.com') {
+      try {
+        if (EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY && EMAILJS_PRIVATE_KEY) {
+          console.log(`[EmailService] Sending customer email via EmailJS: ${customerEmail}`);
+          const emailJsResponse = await emailjs.send(
+            EMAILJS_SERVICE_ID,
+            EMAILJS_TEMPLATE_ID,
+            emailjsTemplateParams,
+            {
+              publicKey: EMAILJS_PUBLIC_KEY,
+              privateKey: EMAILJS_PRIVATE_KEY
+            }
+          );
+          customerEmailSent = true;
+          logger.info(`Order email sent to customer via EmailJS: ${customerEmail}`);
+          logger.info(`EmailJS response: ${emailJsResponse?.status} ${emailJsResponse?.text || ''}`);
+        } else {
+          logger.warn(`EmailJS not fully configured, will attempt Resend fallback for customer.`);
+        }
+      } catch (err) {
+        console.error(`[EmailService] Error sending email to customer via EmailJS:`, err);
+        logger.error(`Error sending customer email via EmailJS: ${err?.message || err}`);
+        if (err?.stack) {
+          logger.error(err.stack);
+        }
+      }
+
+      // Customer fallback via Resend
+      if (!customerEmailSent && resendApiKey) {
+        try {
+          console.log(`[EmailService] Attempting customer email fallback via Resend: ${customerEmail}`);
+          const custRes = await sendResendWithFallback({
+            to: customerEmail,
+            subject: customerSubject,
+            html: customerHtml
+          });
+          const custMsgId = assertResendSuccess(custRes, 'Customer email fallback via Resend failed', customerEmail);
+          customerEmailSent = true;
+          logger.info(`Order email sent to customer via Resend fallback: ${customerEmail} (id: ${custMsgId})`);
+        } catch (resendErr) {
+          console.error(`[EmailService] Customer email fallback via Resend also failed:`, resendErr);
+          logger.error(`Customer email fallback via Resend failed: ${resendErr?.message || resendErr}`);
+        }
+      }
+    } else {
+      logger.warn(`Skipped sending order email to customer for ${orderId}: No valid email found or dummy email.`);
+    }
+
+    let adminEmailSent = false;
+
+    // 2. Try sending to Admin via Resend first
+    if (resendApiKey) {
+      try {
+        console.log(`[EmailService] Sending email to admin via Resend: ${ADMIN_EMAIL}`);
+        const adminRes = await sendResendWithFallback({
+          to: ADMIN_EMAIL,
+          subject: `New Order Received - #${orderId}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+              <h2 style="color: #000;">New Order Received: #${orderId}</h2>
+              <p>A new order has been placed on the store.</p>
+              ${orderSummaryHtml}
+              <p style="margin-top: 30px;">Please check the admin dashboard for more details and to fulfill this order.</p>
+            </div>
+          `
+        });
+        const adminMessageId = assertResendSuccess(adminRes, 'Admin email send failed', ADMIN_EMAIL);
+        console.log(`[EmailService] Resend API Response (Admin):`, adminRes);
+        adminEmailSent = true;
+        logger.info(`Order email sent to admin via Resend: ${ADMIN_EMAIL}`);
+        logger.info(`Admin email message id: ${adminMessageId}`);
+      } catch (err) {
+        console.error(`[EmailService] Error sending email to admin via Resend:`, err);
+        logger.error(`Error sending admin email via Resend: ${err?.message || err}`);
+        if (err?.stack) {
+          logger.error(err.stack);
+        }
+      }
+    }
+
+    // Admin fallback via EmailJS
+    if (!adminEmailSent && EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY && EMAILJS_PRIVATE_KEY) {
+      try {
+        console.log(`[EmailService] Attempting admin email fallback via EmailJS: ${ADMIN_EMAIL}`);
+        await emailjs.send(
           EMAILJS_SERVICE_ID,
           EMAILJS_TEMPLATE_ID,
-          emailjsTemplateParams,
+          {
+            ...emailjsTemplateParams,
+            to_email: ADMIN_EMAIL,
+            email: ADMIN_EMAIL,
+            customer_email: ADMIN_EMAIL,
+            message: `[ADMIN NOTIFICATION] New order received: #${orderId}\n\n` + customerHtml
+          },
           {
             publicKey: EMAILJS_PUBLIC_KEY,
             privateKey: EMAILJS_PRIVATE_KEY
           }
         );
-        logger.info(`Order email sent to customer via EmailJS: ${customerEmail}`);
-        logger.info(`EmailJS response: ${emailJsResponse?.status} ${emailJsResponse?.text || ''}`);
-      } else {
-        logger.warn(`Skipped sending order email to customer for ${orderId}: No valid email found or dummy email.`);
-      }
-    } catch (err) {
-      console.error(`[EmailService] Error sending email to customer:`, err);
-      logger.error(`Error sending customer email via EmailJS: ${err?.message || err}`);
-      if (err?.stack) {
-        logger.error(err.stack);
+        adminEmailSent = true;
+        logger.info(`Order email sent to admin via EmailJS fallback: ${ADMIN_EMAIL}`);
+      } catch (adminEmailJsErr) {
+        logger.error(`Admin email fallback via EmailJS failed: ${adminEmailJsErr?.message || adminEmailJsErr}`);
       }
     }
 
-    // Try sending to Admin via Resend
-    try {
-      if (!resendApiKey) {
-        throw new Error('RESEND_API_KEY is not configured');
-      }
-
-      console.log(`[EmailService] Sending email to admin: ${ADMIN_EMAIL}`);
-      const adminRes = await sendResendWithFallback({
-        to: ADMIN_EMAIL,
-        subject: `New Order Received - #${orderId}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-            <h2 style="color: #000;">New Order Received: #${orderId}</h2>
-            <p>A new order has been placed on the store.</p>
-            ${orderSummaryHtml}
-            <p style="margin-top: 30px;">Please check the admin dashboard for more details and to fulfill this order.</p>
-          </div>
-        `
-      });
-      const adminMessageId = assertResendSuccess(adminRes, 'Admin email send failed', ADMIN_EMAIL);
-      console.log(`[EmailService] Resend API Response (Admin):`, adminRes);
-      logger.info(`Order email sent to admin: ${ADMIN_EMAIL}`);
-      logger.info(`Admin email message id: ${adminMessageId}`);
-    } catch (err) {
-      console.error(`[EmailService] Error sending email to admin:`, err);
-      logger.error(`Error sending admin email via Resend: ${err?.message || err}`);
-      if (err?.stack) {
-        logger.error(err.stack);
+    if (customerEmailSent || adminEmailSent) {
+      try {
+        const { getFirestore } = require('../../config/firebase');
+        const db = getFirestore();
+        let orderRef = db.collection('orders').doc(orderId);
+        const doc = await orderRef.get();
+        if (!doc.exists) {
+          const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+          if (!snap.empty) {
+            orderRef = snap.docs[0].ref;
+          }
+        }
+        await orderRef.update({
+          confirmationEmailSent: true,
+          confirmationEmailSentAt: new Date()
+        });
+        logger.info(`[EmailService] Updated confirmationEmailSent flag for order ${orderId}`);
+      } catch (flagErr) {
+        logger.warn(`Could not update confirmationEmailSent flag for ${orderId}: ${flagErr.message}`);
       }
     }
 

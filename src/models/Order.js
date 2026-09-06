@@ -84,9 +84,13 @@ class Order {
   async findById(orderId) {
     try {
       const db = getFirestore();
-      const doc = await db.collection(this.collection).doc(orderId).get();
+      let doc = await db.collection(this.collection).doc(orderId).get();
       
       if (!doc.exists) {
+        const querySnapshot = await db.collection(this.collection).where('orderId', '==', orderId).limit(1).get();
+        if (!querySnapshot.empty) {
+          return querySnapshot.docs[0].data();
+        }
         return null;
       }
       
@@ -197,11 +201,17 @@ class Order {
   async updateOrderStatus(orderId, status) {
     try {
       const db = getFirestore();
-      const orderRef = db.collection(this.collection).doc(orderId);
+      let orderRef = db.collection(this.collection).doc(orderId);
       
-      const doc = await orderRef.get();
+      let doc = await orderRef.get();
       if (!doc.exists) {
-        throw new Error('Order not found');
+        const querySnapshot = await db.collection(this.collection).where('orderId', '==', orderId).limit(1).get();
+        if (!querySnapshot.empty) {
+          orderRef = querySnapshot.docs[0].ref;
+          doc = querySnapshot.docs[0];
+        } else {
+          throw new Error('Order not found');
+        }
       }
 
       await orderRef.update({
@@ -222,11 +232,17 @@ class Order {
   async updatePaymentStatus(orderId, status) {
     try {
       const db = getFirestore();
-      const orderRef = db.collection(this.collection).doc(orderId);
+      let orderRef = db.collection(this.collection).doc(orderId);
       
-      const doc = await orderRef.get();
+      let doc = await orderRef.get();
       if (!doc.exists) {
-        throw new Error('Order not found');
+        const querySnapshot = await db.collection(this.collection).where('orderId', '==', orderId).limit(1).get();
+        if (!querySnapshot.empty) {
+          orderRef = querySnapshot.docs[0].ref;
+          doc = querySnapshot.docs[0];
+        } else {
+          throw new Error('Order not found');
+        }
       }
 
       await orderRef.update({

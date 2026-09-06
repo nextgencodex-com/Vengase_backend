@@ -390,7 +390,15 @@ exports.generatePayzyPayload = async (req, res, next) => {
         try {
             const { getFirestore } = require('../../config/firebase');
             const db = getFirestore();
-            await db.collection('orders').doc(orderId).update({ paymentMeta });
+            let orderRef = db.collection('orders').doc(orderId);
+            const doc = await orderRef.get();
+            if (!doc.exists) {
+                const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+                if (!snap.empty) {
+                    orderRef = snap.docs[0].ref;
+                }
+            }
+            await orderRef.update({ paymentMeta });
         } catch (metaErr) {
             logger.warn(`Could not persist Payzy paymentMeta for order ${orderId}: ${metaErr.message}`);
         }
@@ -449,30 +457,31 @@ exports.generatePayzyPayload = async (req, res, next) => {
 
 exports.verifyPayzyPayment = async (req, res, next) => {
     try {
-        const { x_order_id, response_code, signature } = req.body;
+        const payload = { ...req.query, ...req.body };
+        const rawOrderId = payload.x_order_id || payload.order_id || payload.orderId;
+        const response_code = payload.response_code || payload.responseCode || payload.code;
+        const signature = payload.signature || payload.sig || payload.hash;
+
         const asString = (value, fallback = '') => String(value ?? fallback).trim();
-        const normalizedOrderId = normalizeOrderId(x_order_id);
+        const normalizedOrderId = normalizeOrderId(rawOrderId);
 
         if (!normalizedOrderId || !signature) {
             return res.status(400).json({ success: false, error: 'Missing parameters' });
         }
 
-        const { getFirestore } = require('../../config/firebase');
-        const db = getFirestore();
-        const orderDoc = await db.collection('orders').doc(normalizedOrderId).get();
+        const order = await Order.findById(normalizedOrderId);
 
-        if (!orderDoc.exists) {
+        if (!order) {
             return res.status(404).json({ success: false, error: 'Order not found' });
         }
 
-        const order = orderDoc.data();
         const meta = order.paymentMeta;
 
         if (!meta) {
             return res.status(400).json({ success: false, error: 'Payment metadata not found for this order' });
         }
 
-        const datalist = "response_code=" + asString(response_code, '') +
+        const buildDatalist = (versionEquals) => "response_code=" + asString(response_code, '') +
             ",x_test_mode=" + asString(meta.x_test_mode, '') +
             ",x_shopid=" + asString(meta.x_shopid, '') +
             ",x_amount=" + asString(meta.x_amount, '') +
@@ -498,35 +507,40 @@ exports.verifyPayzyPayment = async (req, res, next) => {
             ",x_ship_to_zip=" + asString(meta.x_ship_to_zip, '') +
             ",x_freight=" + asString(meta.x_freight, '') +
             ",x_platform=" + asString(meta.x_platform, '') +
-            ",x_version" + asString(meta.x_version, '') +
+            (versionEquals ? ",x_version=" : ",x_version") + asString(meta.x_version, '') +
             ",signed_field_names=" + 
             "response_code,x_test_mode,x_shopid,x_amount,x_order_id,x_response_url,x_first_name,x_last_name,x_company,x_address,x_country,x_state,x_city,x_zip,x_phone,x_email,x_ship_to_first_name,x_ship_to_last_name,x_ship_to_company,x_ship_to_address,x_ship_to_country,x_ship_to_state,x_ship_to_city,x_ship_to_zip,x_freight,x_platform,x_version,signed_field_names";
 
-        const hash = crypto.createHmac('sha256', PAYZY_SECRET_KEY).update(datalist).digest('base64');
-        const newSignature = hash.replace(/\s/g, "+");
+        const hash1 = crypto.createHmac('sha256', PAYZY_SECRET_KEY).update(buildDatalist(false)).digest('base64').replace(/\s/g, "+");
+        const hash2 = crypto.createHmac('sha256', PAYZY_SECRET_KEY).update(buildDatalist(true)).digest('base64').replace(/\s/g, "+");
         const formattedReceivedSignature = signature.replace(/\s/g, "+");
 
-        if (newSignature === formattedReceivedSignature) {
-            if (response_code === '00') {
-                await Order.updatePaymentStatus(normalizedOrderId, 'paid');
-                await Order.updateOrderStatus(normalizedOrderId, 'confirmed');
-                logger.info(`Payzy Order ${normalizedOrderId} payment marked as PAID and CONFIRMED`);
+        const effectiveOrderId = order.orderId || normalizedOrderId;
+
+        if (hash1 === formattedReceivedSignature || hash2 === formattedReceivedSignature) {
+            const rawCode = String(response_code ?? '').trim().toLowerCase();
+            const isSuccess = rawCode === '00' || rawCode === '0' || rawCode === 'success' || rawCode === 'approved';
+
+            if (isSuccess) {
+                await Order.updatePaymentStatus(effectiveOrderId, 'paid');
+                await Order.updateOrderStatus(effectiveOrderId, 'confirmed');
+                logger.info(`Payzy Order ${effectiveOrderId} payment marked as PAID and CONFIRMED`);
                 
-                // Send confirmation email
+                // Send confirmation email to customer and admin
                 try {
-                    await sendOrderConfirmationEmails(normalizedOrderId);
+                    await sendOrderConfirmationEmails(effectiveOrderId);
                 } catch (err) {
-                    logger.error(err);
+                    logger.error('[Payzy] Error sending confirmation email:', err);
                 }
                 
                 return res.status(200).json({ success: true, payment_status: 'paid' });
             } else {
-                await Order.updatePaymentStatus(normalizedOrderId, 'failed');
-                logger.info(`Payzy Order ${normalizedOrderId} payment failed with code ${response_code}`);
+                await Order.updatePaymentStatus(effectiveOrderId, 'failed');
+                logger.info(`Payzy Order ${effectiveOrderId} payment failed with code ${response_code}`);
                 return res.status(200).json({ success: true, payment_status: 'failed' });
             }
         } else {
-            logger.warn(`Payzy signature mismatch for order ${normalizedOrderId}`);
+            logger.warn(`Payzy signature mismatch for order ${effectiveOrderId}`);
             return res.status(400).json({ success: false, error: 'Signature mismatch' });
         }
     } catch (error) {
@@ -721,7 +735,15 @@ exports.generateMintpayPayload = async (req, res, next) => {
             try {
                 const { getFirestore } = require('../../config/firebase');
                 const db = getFirestore();
-                await db.collection('orders').doc(orderId).update({
+                let orderRef = db.collection('orders').doc(orderId);
+                const doc = await orderRef.get();
+                if (!doc.exists) {
+                    const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+                    if (!snap.empty) {
+                        orderRef = snap.docs[0].ref;
+                    }
+                }
+                await orderRef.update({
                     paymentMeta: {
                         mintpay_purchase_id: purchaseId,
                         merchant_id: config.merchantId,
@@ -760,8 +782,10 @@ exports.generateMintpayPayload = async (req, res, next) => {
 
 exports.verifyMintpayPayment = async (req, res, next) => {
     try {
-        const { order_id, purchase_id } = req.body;
-        const normalizedOrderId = normalizeOrderId(order_id);
+        const payload = { ...req.query, ...req.body };
+        const rawOrderId = payload.order_id || payload.orderId || payload.x_order_id;
+        const normalizedOrderId = normalizeOrderId(rawOrderId);
+        let resolvedPurchaseId = payload.purchase_id || payload.purchaseId || payload.id;
         const config = getMintpayConfig();
 
         if (!config.merchantId || !config.apiToken) {
@@ -769,16 +793,11 @@ exports.verifyMintpayPayment = async (req, res, next) => {
             return res.status(500).json({ success: false, error: 'Mintpay payment gateway is not properly configured on server.' });
         }
 
-        let resolvedPurchaseId = purchase_id;
-
-        // If purchase_id not provided in body, check Firestore order document
-        if (!resolvedPurchaseId && normalizedOrderId) {
-            const { getFirestore } = require('../../config/firebase');
-            const db = getFirestore();
-            const orderDoc = await db.collection('orders').doc(normalizedOrderId).get();
-            if (orderDoc.exists) {
-                const orderData = orderDoc.data();
-                resolvedPurchaseId = orderData.paymentMeta?.mintpay_purchase_id;
+        let order = null;
+        if (normalizedOrderId) {
+            order = await Order.findById(normalizedOrderId);
+            if (order && !resolvedPurchaseId) {
+                resolvedPurchaseId = order.paymentMeta?.mintpay_purchase_id || order.paymentMeta?.purchase_id;
             }
         }
 
@@ -786,7 +805,8 @@ exports.verifyMintpayPayment = async (req, res, next) => {
             return res.status(400).json({ success: false, error: 'Missing purchase_id for Mintpay verification' });
         }
 
-        logger.info(`[Mintpay] Verifying payment for order ${normalizedOrderId}, purchaseId: ${resolvedPurchaseId}`);
+        const effectiveOrderId = order?.orderId || normalizedOrderId;
+        logger.info(`[Mintpay] Verifying payment for order ${effectiveOrderId}, purchaseId: ${resolvedPurchaseId}`);
 
         const axios = require('axios');
         const statusResponse = await axios.get(`${config.baseUrl}/api/v2/purchase/merchant-gateway/status-purchase`, {
@@ -802,18 +822,20 @@ exports.verifyMintpayPayment = async (req, res, next) => {
         });
 
         const statusData = statusResponse?.data;
-        const paymentStatusResult = statusData?.data?.status; // e.g. "Approved" or "Rejected"
+        const paymentStatusResult = String(statusData?.data?.status || statusData?.status || '').trim();
         logger.info(`[Mintpay] Status response for purchase ${resolvedPurchaseId}: status=${paymentStatusResult}`, statusData);
 
-        if (paymentStatusResult === 'Approved') {
-            if (normalizedOrderId) {
-                await Order.updatePaymentStatus(normalizedOrderId, 'paid');
-                await Order.updateOrderStatus(normalizedOrderId, 'confirmed');
-                logger.info(`Mintpay Order ${normalizedOrderId} payment marked as PAID and CONFIRMED`);
+        const isApproved = ['approved', 'success', 'successful', 'paid', 'completed'].includes(paymentStatusResult.toLowerCase());
 
-                // Send confirmation email
+        if (isApproved) {
+            if (effectiveOrderId) {
+                await Order.updatePaymentStatus(effectiveOrderId, 'paid');
+                await Order.updateOrderStatus(effectiveOrderId, 'confirmed');
+                logger.info(`Mintpay Order ${effectiveOrderId} payment marked as PAID and CONFIRMED`);
+
+                // Send confirmation email to customer and admin
                 try {
-                    await sendOrderConfirmationEmails(normalizedOrderId);
+                    await sendOrderConfirmationEmails(effectiveOrderId);
                 } catch (err) {
                     logger.error('[Mintpay] Error sending confirmation email:', err);
                 }
@@ -822,18 +844,18 @@ exports.verifyMintpayPayment = async (req, res, next) => {
             return res.status(200).json({
                 success: true,
                 payment_status: 'paid',
-                data: statusData?.data
+                data: statusData?.data || statusData
             });
         } else {
-            if (normalizedOrderId) {
-                await Order.updatePaymentStatus(normalizedOrderId, 'failed');
-                logger.info(`Mintpay Order ${normalizedOrderId} payment marked as FAILED (status=${paymentStatusResult})`);
+            if (effectiveOrderId) {
+                await Order.updatePaymentStatus(effectiveOrderId, 'failed');
+                logger.info(`Mintpay Order ${effectiveOrderId} payment marked as FAILED (status=${paymentStatusResult})`);
             }
 
             return res.status(200).json({
                 success: true,
                 payment_status: 'failed',
-                data: statusData?.data
+                data: statusData?.data || statusData
             });
         }
     } catch (error) {
