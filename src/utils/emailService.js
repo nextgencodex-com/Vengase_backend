@@ -184,7 +184,7 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
   try {
     if (!resendApiKey && !EMAILJS_SERVICE_ID) {
       logger.error('Neither Resend nor EmailJS are fully configured. Email sending skipped.');
-      return;
+      return { success: false };
     }
 
     console.log(`[EmailService] Attempting to send confirmation for order: ${orderId}`);
@@ -195,12 +195,12 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
 
     if (!orderData) {
       logger.error(`Order ${orderId} not found, cannot send email.`);
-      return;
+      return { success: false };
     }
 
     if (!options?.force && orderData.confirmationEmailSent) {
       logger.info(`[EmailService] Order confirmation emails already sent for order ${orderId}. Skipping duplicate.`);
-      return;
+      return { success: true };
     }
 
     console.log(`[EmailService] Found order data:`, JSON.stringify({
@@ -317,10 +317,10 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
       message: customerHtml
     };
 
-    let customerEmailSent = false;
+    let customerEmailSent = !options?.force && orderData.customerConfirmationEmailSent === true;
 
     // 1. Try sending to Customer via EmailJS first
-    if (customerEmail && customerEmail !== 'customer@example.com') {
+    if (!customerEmailSent && customerEmail && customerEmail !== 'customer@example.com') {
       try {
         if (EMAILJS_SERVICE_ID && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY && EMAILJS_PRIVATE_KEY) {
           console.log(`[EmailService] Sending customer email via EmailJS: ${customerEmail}`);
@@ -364,14 +364,14 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
           logger.error(`Customer email fallback via Resend failed: ${resendErr?.message || resendErr}`);
         }
       }
-    } else {
+    } else if (!customerEmailSent) {
       logger.warn(`Skipped sending order email to customer for ${orderId}: No valid email found or dummy email.`);
     }
 
-    let adminEmailSent = false;
+    let adminEmailSent = !options?.force && orderData.adminConfirmationEmailSent === true;
 
     // 2. Try sending to Admin via Resend first
-    if (resendApiKey) {
+    if (!adminEmailSent && resendApiKey) {
       try {
         console.log(`[EmailService] Sending email to admin via Resend: ${ADMIN_EMAIL}`);
         const adminRes = await sendResendWithFallback({
@@ -439,7 +439,9 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
           }
         }
         await orderRef.update({
-          confirmationEmailSent: true,
+          customerConfirmationEmailSent: customerEmailSent,
+          adminConfirmationEmailSent: adminEmailSent,
+          confirmationEmailSent: customerEmailSent && adminEmailSent,
           confirmationEmailSentAt: new Date()
         });
         logger.info(`[EmailService] Updated confirmationEmailSent flag for order ${orderId}`);
@@ -448,12 +450,22 @@ const sendOrderConfirmationEmails = async (orderId, options = {}) => {
       }
     }
 
+    return { success: customerEmailSent && adminEmailSent };
   } catch (error) {
     console.error(`[EmailService] CRITICAL ERROR sending confirmation email:`, error);
     logger.error('Error sending confirmation email via Resend:', error);
+    return { success: false };
   }
 };
 
+// Coalesce simultaneous webhook and browser-return sends within this server.
+const pendingConfirmations = new Map();
 module.exports = {
-  sendOrderConfirmationEmails
+  sendOrderConfirmationEmails: (orderId, options = {}) => {
+    if (pendingConfirmations.has(orderId)) return pendingConfirmations.get(orderId);
+    const pending = sendOrderConfirmationEmails(orderId, options)
+      .finally(() => pendingConfirmations.delete(orderId));
+    pendingConfirmations.set(orderId, pending);
+    return pending;
+  }
 };

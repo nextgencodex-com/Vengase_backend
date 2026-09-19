@@ -260,6 +260,30 @@ class Order {
     }
   }
 
+  async confirmOnepayPayment(orderId, transactionId) {
+    const db = getFirestore();
+    let ref = db.collection(this.collection).doc(orderId);
+    if (!(await ref.get()).exists) {
+      const snapshot = await db.collection(this.collection).where('orderId', '==', orderId).limit(1).get();
+      if (snapshot.empty) throw new Error('Order not found');
+      ref = snapshot.docs[0].ref;
+    }
+    await db.runTransaction(async (transaction) => {
+      const doc = await transaction.get(ref);
+      const order = doc.data();
+      if (!order || order.paymentMethod !== 'onepay' || order.paymentMeta?.onepay_transaction_id !== transactionId) {
+        throw new Error('OnePay transaction does not match order');
+      }
+      if (['paid', 'completed', 'refunded'].includes(order.paymentStatus)) return;
+      transaction.update(ref, {
+        paymentStatus: 'paid',
+        // Repeated callbacks must never reset a shipped/delivered/cancelled order.
+        orderStatus: order.orderStatus === 'pending' ? 'confirmed' : order.orderStatus,
+        updatedAt: new Date()
+      });
+    });
+  }
+
   async getStats() {
     try {
       const db = getFirestore();

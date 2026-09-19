@@ -23,4 +23,11 @@ router.get('/mintpay/verify', paymentController.verifyMintpayPayment);
 router.post('/mintpay/callback', paymentController.verifyMintpayPayment);
 router.get('/mintpay/callback', paymentController.verifyMintpayPayment);
 
+// OnePay endpoints
+router.post('/onepay/generate', paymentController.generateOnepayPayload);
+router.post('/onepay/verify', paymentController.verifyOnepayPayment);
+router.get('/onepay/verify', paymentController.verifyOnepayPayment);
+router.post('/onepay/callback', paymentController.onepayCallback);
+router.get('/onepay/callback', paymentController.onepayCallback);
+
 module.exports = router;

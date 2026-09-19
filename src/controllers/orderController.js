@@ -66,7 +66,7 @@ const createOrder = async (req, res, next) => {
     if (normalizedPaymentMethod === 'cod' || normalizedPaymentMethod === 'cash_on_delivery') {
       const codOrderId = order.orderId || order.id;
       logger.info(`COD order detected. Triggering confirmation emails for order ${codOrderId}.`);
-      // Run email sending asynchronously so it doesn't block the response
+      // Attempt both notifications after saving the order; COD has no online payment callback.
       try {
         await sendOrderConfirmationEmails(codOrderId);
       } catch (err) {

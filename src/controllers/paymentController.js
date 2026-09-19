@@ -190,7 +190,7 @@ exports.paymentCallback = async (req, res, next) => {
         const paymentB64 = body.payment || body.payment_data || body.paymentData || body.x_payment;
 
         let orderId = body.order_id || body.x_order_id || body.orderId || null;
-        let statusCode = body.status_code || body.response_code || body.x_status_code || null;
+        let statusCode = body.status_code ?? body.response_code ?? body.x_status_code ?? null;
         let comment = body.comment || body.response_message || '';
 
         // Try RSA publicDecrypt (WebXPay encrypts callback with their private key → decrypt with their public key)
@@ -246,10 +246,10 @@ exports.paymentCallback = async (req, res, next) => {
 
         let redirectResult = 'failed';
         if (orderId) {
-            const normalizedStatus = String(statusCode || '').trim().toLowerCase();
-            const normalizedComment = String(comment || '').trim().toLowerCase();
-            const isSuccess = ['0', '00', '1', 'ok', 'success', 'approved', 'paid'].includes(normalizedStatus)
-                || /success|approved|paid/.test(normalizedComment);
+            const normalizedStatus = String(statusCode ?? '').trim().toLowerCase();
+            // Free-text comments can say "not approved" or "unsuccessful".
+            // Only the result code determines whether confirmation emails are due.
+            const isSuccess = ['0', '00', '1', 'ok', 'success', 'approved', 'paid'].includes(normalizedStatus);
 
             if (isSuccess) {
                 await Order.updatePaymentStatus(orderId, 'paid');
@@ -865,5 +865,215 @@ exports.verifyMintpayPayment = async (req, res, next) => {
             data: error?.response?.data
         });
         res.status(500).json({ success: false, error: 'Mintpay payment verification failed' });
+    }
+};
+
+// ==========================================
+// ONEPAY INTEGRATION
+// ==========================================
+
+const getOnepayConfig = () => {
+    const appId = String(process.env.ONEPAY_APP_ID || '').trim();
+    const hashSalt = String(process.env.ONEPAY_HASH_SALT || '').trim();
+    const appToken = String(process.env.ONEPAY_APP_TOKEN || '').trim();
+    const callbackToken = String(process.env.ONEPAY_CALLBACK_TOKEN || '').trim();
+    const baseUrl = String(process.env.ONEPAY_API_BASE_URL || 'https://api.onepay.lk').replace(/\/+$/, '');
+
+    if (!appId || !hashSalt) {
+        throw new Error('OnePay is not properly configured on this server');
+    }
+
+    return { appId, hashSalt, appToken, callbackToken, baseUrl };
+};
+
+exports.generateOnepayPayload = async (req, res, next) => {
+    try {
+        const { customerDetails } = req.body;
+        const orderId = normalizeOrderId(req.body.orderId);
+
+        if (!orderId) {
+            return res.status(400).json({ success: false, error: 'Order ID and amount are required' });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order || order.paymentMethod !== 'onepay') {
+            return res.status(404).json({ success: false, error: 'OnePay order not found' });
+        }
+        if (['paid', 'completed', 'refunded'].includes(order.paymentStatus) || order.orderStatus === 'cancelled') {
+            return res.status(409).json({ success: false, error: 'Order is not payable' });
+        }
+        const amount = Number(order.totalAmount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            return res.status(400).json({ success: false, error: 'Invalid order amount' });
+        }
+        const config = getOnepayConfig();
+        const formattedAmount = amount.toFixed(2);
+        const asCleanString = (value, fallback = '') => String(value ?? fallback).trim();
+        const FRONTEND_URL = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+        const currency = 'LKR';
+
+        // Hash Formula: SHA256(app_id + currency + amount + HASH_SALT)
+        const dataToHash = `${config.appId}${currency}${formattedAmount}${config.hashSalt}`;
+        const hash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+
+        const firstName = asCleanString(customerDetails?.firstName || customerDetails?.name, 'Customer');
+        const lastName = asCleanString(customerDetails?.lastName, '');
+        const customerEmail = order.userEmail;
+        const rawPhone = String(order.phone || customerDetails?.contact || customerDetails?.phone || '').replace(/[^+\d]/g, '').replace(/^\+940/, '+94');
+        const cleanPhone = rawPhone.startsWith('+') ? rawPhone : (rawPhone.startsWith('0') ? '+94' + rawPhone.slice(1) : '+94' + rawPhone);
+
+        const redirectUrl = `${FRONTEND_URL}/checkout?payment=onepay-callback&order_id=${encodeURIComponent(orderId)}`;
+
+        const onepayPayload = {
+            app_id: config.appId,
+            amount: formattedAmount,
+            currency: currency,
+            hash: hash,
+            reference: String(orderId),
+            order_reference: String(orderId),
+            customer_first_name: firstName,
+            customer_last_name: lastName || firstName,
+            customer_phone_number: cleanPhone,
+            customer_email: customerEmail,
+            transaction_redirect_url: redirectUrl,
+            additionalData: JSON.stringify({ order_id: orderId })
+        };
+
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (config.appToken) {
+            headers['Authorization'] = config.appToken.startsWith('Bearer ') ? config.appToken : `Bearer ${config.appToken}`;
+        }
+
+        logger.info(`[OnePay] Requesting checkout link for order ${orderId}, amount: ${formattedAmount}`);
+
+        const axios = require('axios');
+        const response = await axios.post(`${config.baseUrl}/v3/checkout/link/`, onepayPayload, {
+            headers,
+            timeout: 20000
+        });
+
+        const responseData = response?.data;
+        logger.info(`[OnePay] Checkout response for order ${orderId}:`, responseData);
+
+        const checkoutUrl = responseData?.data?.gateway_url || responseData?.data?.redirect_url || responseData?.data?.payment_url || responseData?.redirect_url || responseData?.gateway_url || responseData?.url;
+        const transactionId = responseData?.data?.ipg_transaction_id || responseData?.data?.transaction_id || responseData?.ipg_transaction_id || responseData?.transaction_id;
+
+        if (checkoutUrl && transactionId) {
+            // Persist paymentMeta in Firestore
+            try {
+                const { getFirestore } = require('../../config/firebase');
+                const db = getFirestore();
+                let orderRef = db.collection('orders').doc(orderId);
+                const doc = await orderRef.get();
+                if (!doc.exists) {
+                    const snap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+                    if (!snap.empty) {
+                        orderRef = snap.docs[0].ref;
+                    }
+                }
+                await orderRef.update({
+                    paymentMethod: 'onepay',
+                    paymentMeta: {
+                        ...(order.paymentMeta || {}),
+                        onepay_transaction_id: transactionId,
+                        onepay_initiated_at: new Date()
+                    }
+                });
+            } catch (metaErr) {
+                throw new Error(`Could not save OnePay transaction for order ${orderId}`);
+            }
+
+            return res.status(200).json({
+                success: true,
+                url: checkoutUrl,
+                transaction_id: transactionId,
+                order_id: orderId
+            });
+        } else {
+            logger.error('[OnePay] Response missing checkout URL:', responseData);
+            throw new Error(responseData?.message || responseData?.error || 'Invalid response from OnePay API');
+        }
+    } catch (error) {
+        logger.error('[OnePay] Error generating payment payload:', {
+            message: error?.message,
+            status: error?.response?.status,
+            data: error?.response?.data
+        });
+        res.status(500).json({
+            success: false,
+            error: error?.response?.data?.message || error?.message || 'Failed to initiate OnePay payment'
+        });
+    }
+};
+
+// Both browser returns and webhooks verify the transaction saved at checkout.
+const verifyStoredOnepayPayment = async (order, incomingTransactionId) => {
+    if (order.paymentStatus === 'refunded') return { success: false, payment_status: 'refunded' };
+    const transactionId = order.paymentMeta?.onepay_transaction_id;
+    if (!transactionId || (incomingTransactionId && incomingTransactionId !== transactionId)) {
+        return { success: false, payment_status: order.paymentStatus || 'pending' };
+    }
+    if (!['paid', 'completed'].includes(order.paymentStatus)) {
+        const config = getOnepayConfig();
+        const headers = { 'Content-Type': 'application/json' };
+        if (config.appToken) {
+            headers.Authorization = config.appToken.startsWith('Bearer ') ? config.appToken : `Bearer ${config.appToken}`;
+        }
+        const response = await require('axios').post(`${config.baseUrl}/v3/transaction/status/`, {
+            app_id: config.appId,
+            onepay_transaction_id: transactionId
+        }, { headers, timeout: 20000 });
+        const data = response?.data?.data || response?.data;
+        // The outer status=200 means the API call worked, not that money was received.
+        const paid = data?.status === true &&
+            data.ipg_transaction_id === transactionId && data.currency === 'LKR' &&
+            Number.isFinite(Number(data.amount)) &&
+            Math.round(Number(data.amount) * 100) === Math.round(Number(order.totalAmount) * 100);
+        if (!paid) return { success: false, payment_status: order.paymentStatus || 'pending' };
+        await Order.confirmOnepayPayment(order.orderId, transactionId);
+    }
+    // Also retry outstanding emails on repeat callbacks / browser returns.
+    const emails = await sendOrderConfirmationEmails(order.orderId);
+    return { success: true, payment_status: 'paid', ...(emails?.success === false ? { emails_pending: true } : {}) };
+};
+
+exports.onepayCallback = async (req, res) => {
+    try {
+        const body = { ...req.query, ...req.body };
+        const transactionId = String(body.transaction_id || body.ipg_transaction_id || body.data?.transaction_id || '').trim();
+        if (!transactionId) return res.status(400).json({ success: false, error: 'Transaction ID required' });
+        // Resolve by the stored transaction, never trust callback order IDs or status.
+        const { getFirestore } = require('../../config/firebase');
+        const snap = await getFirestore().collection('orders')
+            .where('paymentMeta.onepay_transaction_id', '==', transactionId).limit(1).get();
+        if (snap.empty) return res.status(404).json({ success: false, error: 'OnePay order not found' });
+        const order = snap.docs[0].data();
+        if (order.paymentMethod !== 'onepay') return res.status(400).json({ success: false, error: 'Invalid payment method' });
+        const result = await verifyStoredOnepayPayment(order, transactionId);
+        if (result.emails_pending) return res.status(503).json(result);
+        return res.status(200).json(result);
+    } catch (error) {
+        logger.error('[OnePay] Callback verification failed:', error.message);
+        // A non-2xx response allows the gateway to retry transient failures.
+        return res.status(503).json({ success: false, error: 'Payment verification temporarily unavailable' });
+    }
+};
+
+exports.verifyOnepayPayment = async (req, res) => {
+    try {
+        const payload = { ...req.query, ...req.body };
+        const orderId = normalizeOrderId(payload.order_id || payload.orderId || payload.reference);
+        if (!orderId) return res.status(400).json({ success: false, error: 'Order ID required' });
+        const order = await Order.findById(orderId);
+        if (!order || order.paymentMethod !== 'onepay') {
+            return res.status(404).json({ success: false, error: 'OnePay order not found' });
+        }
+        const transactionId = String(payload.transaction_id || payload.ipg_transaction_id || payload.id || '').trim();
+        return res.status(200).json(await verifyStoredOnepayPayment(order, transactionId));
+    } catch (error) {
+        logger.error('[OnePay] Payment verification failed:', error.message);
+        return res.status(503).json({ success: false, error: 'OnePay payment verification temporarily unavailable' });
     }
 };
