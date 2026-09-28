@@ -918,19 +918,35 @@ exports.generateOnepayPayload = async (req, res, next) => {
 
         const firstName = asCleanString(customerDetails?.firstName || customerDetails?.name, 'Customer');
         const lastName = asCleanString(customerDetails?.lastName, '');
-        const customerEmail = order.userEmail;
+        const customerEmail = asCleanString(order.userEmail);
         const rawPhone = String(order.phone || customerDetails?.contact || customerDetails?.phone || '').replace(/[^+\d]/g, '').replace(/^\+940/, '+94');
-        const cleanPhone = rawPhone.startsWith('+') ? rawPhone : (rawPhone.startsWith('0') ? '+94' + rawPhone.slice(1) : '+94' + rawPhone);
+        const cleanPhone = rawPhone.startsWith('+') ? rawPhone
+            : rawPhone.startsWith('00') ? '+' + rawPhone.slice(2)
+            : rawPhone.startsWith('94') ? '+' + rawPhone
+            : '+94' + rawPhone.replace(/^0/, '');
+
+        if (!/^\+[1-9]\d{7,14}$/.test(cleanPhone)) {
+            return res.status(422).json({ success: false, error: 'Please enter a valid phone number including the country code.' });
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+            return res.status(422).json({ success: false, error: 'Please enter a valid email address.' });
+        }
+
+        let frontendUrl;
+        try { frontendUrl = new URL(FRONTEND_URL); } catch (_) { /* Validated below. */ }
+        if (frontendUrl?.protocol !== 'https:') {
+            return res.status(500).json({ success: false, error: 'OnePay requires an HTTPS storefront return URL. Please contact the store.' });
+        }
 
         const redirectUrl = `${FRONTEND_URL}/checkout?payment=onepay-callback&order_id=${encodeURIComponent(orderId)}`;
 
         const onepayPayload = {
             app_id: config.appId,
-            amount: formattedAmount,
+            // JSON number required by OnePay; keep two decimals when computing the hash.
+            amount: Number(formattedAmount),
             currency: currency,
             hash: hash,
             reference: String(orderId),
-            order_reference: String(orderId),
             customer_first_name: firstName,
             customer_last_name: lastName || firstName,
             customer_phone_number: cleanPhone,
@@ -955,7 +971,10 @@ exports.generateOnepayPayload = async (req, res, next) => {
         });
 
         const responseData = response?.data;
-        logger.info(`[OnePay] Checkout response for order ${orderId}:`, responseData);
+        logger.info(`[OnePay] Checkout response for order ${orderId}: ${JSON.stringify({
+            status: responseData?.status,
+            message: responseData?.message
+        })}`);
 
         const checkoutUrl = responseData?.data?.gateway_url || responseData?.data?.redirect_url || responseData?.data?.payment_url || responseData?.redirect_url || responseData?.gateway_url || responseData?.url;
         const transactionId = responseData?.data?.ipg_transaction_id || responseData?.data?.transaction_id || responseData?.ipg_transaction_id || responseData?.transaction_id;
@@ -993,17 +1012,27 @@ exports.generateOnepayPayload = async (req, res, next) => {
             });
         } else {
             logger.error('[OnePay] Response missing checkout URL:', responseData);
-            throw new Error(responseData?.message || responseData?.error || 'Invalid response from OnePay API');
+            const gatewayError = new Error(responseData?.message || responseData?.error || 'Invalid response from OnePay API');
+            gatewayError.response = { status: response.status, data: responseData };
+            throw gatewayError;
         }
     } catch (error) {
-        logger.error('[OnePay] Error generating payment payload:', {
+        // The file logger prints only the message, so serialize diagnostics into it.
+        // Keep request credentials and customer values out of the log.
+        const gatewayData = error?.response?.data;
+        const validationErrors = gatewayData?.errors || gatewayData?.data?.errors;
+        logger.error(`[OnePay] Error generating payment payload: ${JSON.stringify({
             message: error?.message,
-            status: error?.response?.status,
-            data: error?.response?.data
-        });
-        res.status(500).json({
+            httpStatus: error?.response?.status,
+            gatewayStatus: gatewayData?.status,
+            gatewayMessage: gatewayData?.message,
+            invalidFields: validationErrors && typeof validationErrors === 'object'
+                ? Object.keys(validationErrors) : []
+        })}`);
+        res.status(error?.response ? 502 : 500).json({
             success: false,
-            error: error?.response?.data?.message || error?.message || 'Failed to initiate OnePay payment'
+            error: error?.response?.data?.message || error?.message || 'Failed to initiate OnePay payment',
+            ...(error?.response ? { code: 'ONEPAY_CHECKOUT_REJECTED' } : {})
         });
     }
 };
