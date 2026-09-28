@@ -879,7 +879,7 @@ const getOnepayConfig = () => {
     const callbackToken = String(process.env.ONEPAY_CALLBACK_TOKEN || '').trim();
     const baseUrl = String(process.env.ONEPAY_API_BASE_URL || 'https://api.onepay.lk').replace(/\/+$/, '');
 
-    if (!appId || !hashSalt) {
+    if (!appId || !hashSalt || !appToken) {
         throw new Error('OnePay is not properly configured on this server');
     }
 
@@ -942,8 +942,8 @@ exports.generateOnepayPayload = async (req, res, next) => {
 
         const onepayPayload = {
             app_id: config.appId,
-            // JSON number required by OnePay; keep two decimals when computing the hash.
-            amount: Number(formattedAmount),
+            // Match OnePay's official SDK: identical two-decimal strings in body and hash.
+            amount: formattedAmount,
             currency: currency,
             hash: hash,
             reference: String(orderId),
@@ -956,11 +956,10 @@ exports.generateOnepayPayload = async (req, res, next) => {
         };
 
         const headers = {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': config.appToken
         };
-        if (config.appToken) {
-            headers['Authorization'] = config.appToken.startsWith('Bearer ') ? config.appToken : `Bearer ${config.appToken}`;
-        }
 
         logger.info(`[OnePay] Requesting checkout link for order ${orderId}, amount: ${formattedAmount}`);
 
@@ -976,7 +975,7 @@ exports.generateOnepayPayload = async (req, res, next) => {
             message: responseData?.message
         })}`);
 
-        const checkoutUrl = responseData?.data?.gateway_url || responseData?.data?.redirect_url || responseData?.data?.payment_url || responseData?.redirect_url || responseData?.gateway_url || responseData?.url;
+        const checkoutUrl = responseData?.data?.gateway?.redirect_url || responseData?.data?.gateway_url || responseData?.data?.redirect_url || responseData?.data?.payment_url || responseData?.redirect_url || responseData?.gateway_url || responseData?.url;
         const transactionId = responseData?.data?.ipg_transaction_id || responseData?.data?.transaction_id || responseData?.ipg_transaction_id || responseData?.transaction_id;
 
         if (checkoutUrl && transactionId) {
@@ -1020,12 +1019,14 @@ exports.generateOnepayPayload = async (req, res, next) => {
         // The file logger prints only the message, so serialize diagnostics into it.
         // Keep request credentials and customer values out of the log.
         const gatewayData = error?.response?.data;
-        const validationErrors = gatewayData?.errors || gatewayData?.data?.errors;
+        const validationErrors = gatewayData?.errors || gatewayData?.data?.errors ||
+            (typeof gatewayData?.error === 'object' ? gatewayData.error : null);
         logger.error(`[OnePay] Error generating payment payload: ${JSON.stringify({
             message: error?.message,
             httpStatus: error?.response?.status,
             gatewayStatus: gatewayData?.status,
             gatewayMessage: gatewayData?.message,
+            gatewayError: typeof gatewayData?.error === 'string' ? gatewayData.error : undefined,
             invalidFields: validationErrors && typeof validationErrors === 'object'
                 ? Object.keys(validationErrors) : []
         })}`);
@@ -1046,10 +1047,11 @@ const verifyStoredOnepayPayment = async (order, incomingTransactionId) => {
     }
     if (!['paid', 'completed'].includes(order.paymentStatus)) {
         const config = getOnepayConfig();
-        const headers = { 'Content-Type': 'application/json' };
-        if (config.appToken) {
-            headers.Authorization = config.appToken.startsWith('Bearer ') ? config.appToken : `Bearer ${config.appToken}`;
-        }
+        const headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': config.appToken
+        };
         const response = await require('axios').post(`${config.baseUrl}/v3/transaction/status/`, {
             app_id: config.appId,
             onepay_transaction_id: transactionId
