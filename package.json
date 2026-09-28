@@ -4,8 +4,8 @@
   "description": "Firebase backend for Vengase e-commerce platform",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node init && node server.js",
+    "dev": "node init && nodemon server.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:resend": "node scripts/test-resend.js",
