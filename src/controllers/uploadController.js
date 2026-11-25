@@ -5,12 +5,20 @@ const logger = require('../utils/logger');
 // Configure multer for memory storage (we'll process images in memory)
 const storage = multer.memoryStorage();
 
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'image/gif'
+]);
+
 const fileFilter = (req, file, cb) => {
-  // Check if file is an image
-  if (file.mimetype.startsWith('image/')) {
+  // Strictly allowlist raster image MIME types (blocks image/svg+xml and HTML/script uploads)
+  if (ALLOWED_IMAGE_MIME_TYPES.has(String(file.mimetype || '').toLowerCase())) {
     cb(null, true);
   } else {
-    cb(new Error('Only image files are allowed'), false);
+    cb(new Error('Only JPEG, PNG, WebP, and GIF image files are allowed'), false);
   }
 };
 
@@ -47,10 +55,10 @@ const uploadImage = async (req, res, next) => {
   } catch (error) {
     logger.error('Error in uploadImage:', error);
     
-    if (error.message === 'Only image files are allowed') {
+    if (error.message && error.message.includes('image files are allowed')) {
       return res.status(400).json({
         success: false,
-        error: 'Only image files are allowed'
+        error: error.message
       });
     }
     
@@ -123,6 +131,13 @@ const deleteImage = async (req, res, next) => {
   } catch (error) {
     logger.error('Error in deleteImage:', error);
     
+    if (error.message === 'Invalid image filename' || error.message === 'Invalid image path') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid image filename'
+      });
+    }
+
     if (error.message === 'Image file not found') {
       return res.status(404).json({
         success: false,

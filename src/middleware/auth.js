@@ -1,13 +1,16 @@
 const { getAuth } = require('../../config/firebase');
 const logger = require('../utils/logger');
+const { auditLog } = require('../utils/auditLogger');
 
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+    const token = authHeader && authHeader.startsWith('Bearer ')
+      ? authHeader.split(' ')[1]
+      : null;
 
     if (!token) {
-      logger.warn('Authentication failed: No token provided');
+      logger.warn(`Authentication failed: No token provided (${req.method} ${req.originalUrl})`);
       return res.status(401).json({
         success: false,
         error: 'Access token required'
@@ -17,24 +20,23 @@ const authenticateToken = async (req, res, next) => {
     // Verify Firebase ID token
     const decodedToken = await getAuth().verifyIdToken(token);
     req.user = decodedToken;
-    
+
     logger.debug(`Token verified for user: ${decodedToken.email} (${decodedToken.uid})`);
     next();
   } catch (error) {
-    logger.error('Authentication error:', {
-      error: error.message,
+    logger.warn('Authentication error:', {
       code: error.code,
-      tokenPreview: req.headers.authorization ? req.headers.authorization.substring(0, 20) + '...' : 'none'
+      path: req.originalUrl
     });
-    
+
     let errorMessage = 'Invalid or expired token';
     if (error.code === 'auth/id-token-expired') {
       errorMessage = 'Token expired';
     } else if (error.code === 'auth/argument-error') {
       errorMessage = 'Invalid token format';
     }
-    
-    return res.status(403).json({
+
+    return res.status(401).json({
       success: false,
       error: errorMessage
     });
@@ -50,39 +52,25 @@ const requireAdmin = async (req, res, next) => {
       });
     }
 
-    // List of known admin emails (fallback)
-    const ADMIN_EMAILS = [
-      'admin@vengase.com'
-    ];
+    // Verify live custom claims against Firebase Auth so revoked admins are rejected immediately
+    const userRecord = await getAuth().getUser(req.user.uid);
+    const hasAdminClaim = userRecord.customClaims?.admin === true || userRecord.customClaims?.isAdmin === true;
 
-    // Check if user has admin custom claims OR is in admin email list
-    const hasAdminClaim = req.user.admin === true;
-    const isAdminEmail = ADMIN_EMAILS.includes(req.user.email);
-
-    if (!hasAdminClaim && !isAdminEmail) {
-      logger.warn(`Access denied for user: ${req.user.email} (UID: ${req.user.uid})`);
-      logger.debug('User claims:', req.user);
+    if (!hasAdminClaim) {
+      auditLog('ADMIN_ACCESS_DENIED', {
+        actor: req.user,
+        ip: req.ip,
+        target: `${req.method} ${req.originalUrl}`,
+        outcome: 'denied'
+      });
       return res.status(403).json({
         success: false,
         error: 'Admin access required'
       });
     }
 
-    // If user is admin by email but doesn't have claims, set them
-    if (isAdminEmail && !hasAdminClaim) {
-      try {
-        await getAuth().setCustomUserClaims(req.user.uid, { 
-          admin: true,
-          role: 'admin',
-          grantedAt: new Date().toISOString()
-        });
-        logger.info(`Admin claims granted to: ${req.user.email}`);
-      } catch (claimError) {
-        logger.warn('Failed to set admin claims:', claimError);
-        // Continue anyway since email is in admin list
-      }
-    }
-
+    req.user.isAdmin = true;
+    req.user.admin = true;
     next();
   } catch (error) {
     logger.error('Admin check error:', error);

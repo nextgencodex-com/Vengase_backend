@@ -1,5 +1,6 @@
 const admin = require('firebase-admin');
 const logger = require('../utils/logger');
+const { auditLog } = require('../utils/auditLogger');
 
 // Authenticate Firebase token
 const authenticateToken = async (req, res, next) => {
@@ -52,6 +53,12 @@ const isAdmin = async (req, res, next) => {
       req.user.isAdmin = true;
       next();
     } else {
+      auditLog('ADMIN_ACCESS_DENIED', {
+        actor: req.user,
+        ip: req.ip,
+        target: `${req.method} ${req.originalUrl}`,
+        outcome: 'denied'
+      });
       return res.status(403).json({
         success: false,
         error: 'Admin access required'

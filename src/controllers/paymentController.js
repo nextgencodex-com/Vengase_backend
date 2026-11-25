@@ -1,7 +1,18 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { auditLog } = require('../utils/auditLogger');
 const Order = require('../models/Order');
 const { sendOrderConfirmationEmails } = require('../utils/emailService');
+
+const safeEqual = (a, b) => {
+    const strA = String(a ?? '');
+    const strB = String(b ?? '');
+    if (!strA || !strB) return false;
+    const bufA = Buffer.from(strA, 'utf8');
+    const bufB = Buffer.from(strB, 'utf8');
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+};
 
 const normalizePemKey = (rawKey) => {
     if (!rawKey) return null;
@@ -113,11 +124,21 @@ exports.generatePaymentPayload = async (req, res, next) => {
         }
 
         const normalizedOrderId = String(orderId || '').trim();
-        const normalizedAmount = Number(amount);
 
         if (!normalizedOrderId) {
             return res.status(400).json({ success: false, error: 'Invalid orderId for payment.' });
         }
+
+        // Always fetch authoritative order amount from Firestore (never trust client-submitted amount)
+        const order = await Order.findById(normalizedOrderId);
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found.' });
+        }
+        if (['paid', 'completed', 'refunded'].includes(order.paymentStatus) || order.orderStatus === 'cancelled') {
+            return res.status(409).json({ success: false, error: 'Order is not payable.' });
+        }
+
+        const normalizedAmount = Number(order.totalAmount);
         if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
             return res.status(400).json({ success: false, error: 'Invalid amount for payment.' });
         }
@@ -174,71 +195,62 @@ exports.paymentCallback = async (req, res, next) => {
         const body = (req.body && Object.keys(req.body).length > 0) ? req.body : (req.query || {});
         logger.info('WebXPay Callback received:', body);
 
-        // ----- Security guard: verify secret_key sent back matches ours -----
-        const receivedSecretKey = String(
-            body.secret_key || body.secretKey || body.x_secret_key || ''
-        ).trim();
+        // ----- Fail-closed security guard: require configured keys and matching secret_key -----
         const expectedSecretKey = String(WEBXPAY_SECRET_KEY || '').trim();
-
-        if (expectedSecretKey && receivedSecretKey && receivedSecretKey !== expectedSecretKey) {
-            logger.warn('WebXPay callback rejected: secret_key mismatch');
+        if (!expectedSecretKey || !WEBXPAY_PUBLIC_KEY) {
+            logger.error('WebXPay callback rejected: gateway keys not configured on server');
             return res.redirect(`${FRONTEND_URL}/?payment=failed`);
         }
 
-        // ----- Parse payment data -----
-        // WebXPay may send either an encrypted payment blob or direct fields in query/body.
+        const receivedSecretKey = String(
+            body.secret_key || body.secretKey || body.x_secret_key || ''
+        ).trim();
+
+        if (!receivedSecretKey || !safeEqual(receivedSecretKey, expectedSecretKey)) {
+            auditLog('WEBXPAY_CALLBACK_REJECTED', {
+                ip: req.ip,
+                outcome: 'denied',
+                details: { reason: 'missing_or_mismatched_secret_key' }
+            });
+            return res.redirect(`${FRONTEND_URL}/?payment=failed`);
+        }
+
+        // ----- Parse RSA-signed payment blob (no unencrypted/plain-base64 fallbacks) -----
         const paymentB64 = body.payment || body.payment_data || body.paymentData || body.x_payment;
+        if (!paymentB64 || typeof paymentB64 !== 'string') {
+            auditLog('WEBXPAY_CALLBACK_REJECTED', {
+                ip: req.ip,
+                outcome: 'denied',
+                details: { reason: 'missing_encrypted_payment_blob' }
+            });
+            return res.redirect(`${FRONTEND_URL}/?payment=failed`);
+        }
 
-        let orderId = body.order_id || body.x_order_id || body.orderId || null;
-        let statusCode = body.status_code ?? body.response_code ?? body.x_status_code ?? null;
-        let comment = body.comment || body.response_message || '';
+        let orderId = null;
+        let statusCode = null;
+        let comment = '';
 
-        // Try RSA publicDecrypt (WebXPay encrypts callback with their private key → decrypt with their public key)
-        if (paymentB64 && WEBXPAY_PUBLIC_KEY) {
-            try {
-                const buffer = Buffer.from(paymentB64, 'base64');
-                const decryptedData = crypto.publicDecrypt(
-                    { key: WEBXPAY_PUBLIC_KEY, padding: crypto.constants.RSA_PKCS1_PADDING },
-                    buffer
-                ).toString('utf8');
+        try {
+            const buffer = Buffer.from(paymentB64, 'base64');
+            const decryptedData = crypto.publicDecrypt(
+                { key: WEBXPAY_PUBLIC_KEY, padding: crypto.constants.RSA_PKCS1_PADDING },
+                buffer
+            ).toString('utf8');
 
-                logger.info('WebXPay decrypted payment data:', decryptedData);
-                // Format: order_id|order_reference_number|date_time|status_code|comment|payment_gateway
-                const parts = decryptedData.split('|');
-                orderId    = parts[0] || null;
-                statusCode = parts[3] || null;
-                comment    = parts[4] || '';
-            } catch (decryptErr) {
-                logger.warn('RSA publicDecrypt failed, trying plain base64 parse:', decryptErr.message);
-                // Fallback: try plain base64 decode (some WebXPay versions send plain text in base64)
-                try {
-                    const plainData = Buffer.from(paymentB64, 'base64').toString('utf8');
-                    if (plainData.includes('|')) {
-                        const parts = plainData.split('|');
-                        orderId    = parts[0] || null;
-                        statusCode = parts[3] || null;
-                        comment    = parts[4] || '';
-                        logger.info('WebXPay plain base64 parse succeeded:', { orderId, statusCode });
-                    }
-                } catch (parseErr) {
-                    logger.error('All payment data parsing attempts failed:', parseErr.message);
-                }
+            const parts = decryptedData.split('|');
+            if (parts.length < 4) {
+                throw new Error('Malformed decrypted WebXPay payload');
             }
-        } else if (paymentB64) {
-            // No public key configured: try plain base64 decode as last resort
-            try {
-                const plainData = Buffer.from(paymentB64, 'base64').toString('utf8');
-                if (plainData.includes('|')) {
-                    const parts = plainData.split('|');
-                    orderId    = parts[0] || null;
-                    statusCode = parts[3] || null;
-                    comment    = parts[4] || '';
-                }
-            } catch (e) {
-                logger.error('Plain base64 parse failed:', e.message);
-            }
-        } else {
-            logger.info('WebXPay callback did not include encrypted payment blob, using direct fields only');
+            orderId    = parts[0] || null;
+            statusCode = parts[3] || null;
+            comment    = parts[4] || '';
+        } catch (decryptErr) {
+            auditLog('WEBXPAY_CALLBACK_REJECTED', {
+                ip: req.ip,
+                outcome: 'denied',
+                details: { reason: 'rsa_decryption_failed', error: decryptErr.message }
+            });
+            return res.redirect(`${FRONTEND_URL}/?payment=failed`);
         }
 
         orderId = normalizeOrderId(orderId);
@@ -511,13 +523,18 @@ exports.verifyPayzyPayment = async (req, res, next) => {
             ",signed_field_names=" + 
             "response_code,x_test_mode,x_shopid,x_amount,x_order_id,x_response_url,x_first_name,x_last_name,x_company,x_address,x_country,x_state,x_city,x_zip,x_phone,x_email,x_ship_to_first_name,x_ship_to_last_name,x_ship_to_company,x_ship_to_address,x_ship_to_country,x_ship_to_state,x_ship_to_city,x_ship_to_zip,x_freight,x_platform,x_version,signed_field_names";
 
+        if (!PAYZY_SECRET_KEY) {
+            logger.error('Payzy verification rejected: PAYZY_SECRET_KEY is not configured');
+            return res.status(500).json({ success: false, error: 'Payzy verification is not configured' });
+        }
+
         const hash1 = crypto.createHmac('sha256', PAYZY_SECRET_KEY).update(buildDatalist(false)).digest('base64').replace(/\s/g, "+");
         const hash2 = crypto.createHmac('sha256', PAYZY_SECRET_KEY).update(buildDatalist(true)).digest('base64').replace(/\s/g, "+");
-        const formattedReceivedSignature = signature.replace(/\s/g, "+");
+        const formattedReceivedSignature = String(signature).replace(/\s/g, "+");
 
         const effectiveOrderId = order.orderId || normalizedOrderId;
 
-        if (hash1 === formattedReceivedSignature || hash2 === formattedReceivedSignature) {
+        if (safeEqual(hash1, formattedReceivedSignature) || safeEqual(hash2, formattedReceivedSignature)) {
             const rawCode = String(response_code ?? '').trim().toLowerCase();
             const isSuccess = rawCode === '00' || rawCode === '0' || rawCode === 'success' || rawCode === 'approved';
 

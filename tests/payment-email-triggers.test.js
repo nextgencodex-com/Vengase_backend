@@ -54,7 +54,8 @@ test('WebXPay failed result with a not-approved comment must not send confirmati
   expect(sendOrderConfirmationEmails).not.toHaveBeenCalled();
 });
 test('WebXPay numeric zero success code sends confirmation', async () => {
-  await payments.paymentCallback({ body: { order_id: 'ORD-1', status_code: 0, secret_key: 'test-webx' } }, response());
+  const payment = crypto.privateEncrypt({ key: keys.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from('ORD-1|REF|2026-09-19|0|Approved|card')).toString('base64');
+  await payments.paymentCallback({ body: { payment, secret_key: 'test-webx' } }, response());
   expect(sendOrderConfirmationEmails).toHaveBeenCalledWith('ORD-1');
 });
 test('WebXPay success text without a result code does not send confirmation', async () => {

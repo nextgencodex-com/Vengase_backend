@@ -15,10 +15,10 @@ const {
   validateOrderStatusUpdate,
   validatePaymentStatusUpdate
 } = require('../validators/orderValidator');
-const { authenticateToken, isAdmin } = require('../middleware/authMiddleware');
+const { authenticateToken, isAdmin, optionalAuth } = require('../middleware/authMiddleware');
 
-// Public routes (guest checkout allowed)
-router.post('/', validateOrder, createOrder);
+// Public routes (guest checkout allowed; attaches req.user if signed in)
+router.post('/', optionalAuth, validateOrder, createOrder);
 
 // Authenticated routes
 router.get('/user/:userId', authenticateToken, getUserOrders);

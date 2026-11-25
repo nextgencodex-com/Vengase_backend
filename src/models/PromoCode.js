@@ -313,18 +313,31 @@ class PromoCode {
     try {
       const db = getFirestore();
       const promoRef = db.collection(this.collection).doc(id);
-      const doc = await promoRef.get();
 
-      if (!doc.exists) {
-        throw new Error('Promo code not found');
-      }
+      const nextUsedCount = await db.runTransaction(async (transaction) => {
+        const doc = await transaction.get(promoRef);
+        if (!doc.exists) {
+          throw new Error('Promo code not found');
+        }
 
-      const promo = doc.data();
-      const nextUsedCount = Number(promo.usedCount || 0) + 1;
+        const promo = doc.data();
+        const usageLimitValue = this.sanitizeNumber(
+          promo.usageLimit ?? promo.maxUses ?? promo.limit,
+          0
+        );
+        const usageLimit = usageLimitValue > 0 ? usageLimitValue : null;
+        const currentUsed = this.sanitizeNumber(promo.usedCount ?? promo.usageCount, 0);
 
-      await promoRef.update({
-        usedCount: nextUsedCount,
-        updatedAt: new Date()
+        if (usageLimit !== null && currentUsed >= usageLimit) {
+          throw new Error('Promo code usage limit reached');
+        }
+
+        const updatedCount = currentUsed + 1;
+        transaction.update(promoRef, {
+          usedCount: updatedCount,
+          updatedAt: new Date()
+        });
+        return updatedCount;
       });
 
       return nextUsedCount;

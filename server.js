@@ -35,7 +35,11 @@ initializeFirebase();
 // Middleware
 // Allow image/static assets to be loaded by the frontend when served from a different origin.
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: 'cross-origin' }
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  hsts: process.env.NODE_ENV === 'production'
+    ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+    : false
 }));
 
 // Trust proxy unconditionally for accurate client IP resolution behind load balancers/CDNs
@@ -60,7 +64,7 @@ const CORS_ALLOW_ALL = String(process.env.CORS_ALLOW_ALL || 'false').toLowerCase
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (CORS_ALLOW_ALL) {
+    if (CORS_ALLOW_ALL && process.env.NODE_ENV !== 'production') {
       return callback(null, true);
     }
 
@@ -72,7 +76,7 @@ const corsOptions = {
     logger.warn(`CORS blocked origin: ${origin}`);
     return callback(new Error(`Origin ${origin} not allowed by CORS`));
   },
-  credentials: true,
+  credentials: !(CORS_ALLOW_ALL && process.env.NODE_ENV !== 'production'),
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   optionsSuccessStatus: 200
@@ -84,9 +88,11 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // Rate limiting: Protect sensitive operations while allowing seamless product catalog browsing
+const rateLimitWindowMs = Number(process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000;
+
 const apiLimiter = rateLimit({
-  windowMs: Number(process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 50000),
+  windowMs: rateLimitWindowMs,
+  max: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 300),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -94,25 +100,53 @@ const apiLimiter = rateLimit({
     error: 'Too many requests from this IP, please try again later.'
   },
   skip: (req) => (
+    process.env.NODE_ENV === 'test' ||
     req.method === 'OPTIONS' ||
     req.originalUrl === '/health' ||
     req.originalUrl.startsWith('/images') ||
     req.originalUrl.startsWith('/uploads') ||
     (req.method === 'GET' && (
       req.originalUrl.includes('/products') ||
-      req.originalUrl.includes('/categories') ||
-      req.originalUrl.includes('/promo-codes') ||
-      req.originalUrl.includes('/auth') ||
-      req.originalUrl.includes('/orders') ||
-      req.originalUrl.includes('/admin')
+      req.originalUrl.includes('/categories')
     ))
   ),
 });
 
+// Strict rate limiter for auth, contact, newsletter, and promo code validation
+const strictPublicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.STRICT_RATE_LIMIT_MAX || 25),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: {
+    success: false,
+    error: 'Too many requests. Please wait a few minutes before trying again.'
+  }
+});
+
+// Checkout & payment initiation rate limiter
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.CHECKOUT_RATE_LIMIT_MAX || 40),
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: {
+    success: false,
+    error: 'Too many checkout or payment requests. Please try again shortly.'
+  }
+});
+
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
-// Product creation uploads base64 images, so the default JSON limit is too small.
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+
+// Apply large 25MB body limit ONLY to product/upload routes that handle base64 images; keep global limit at 1MB.
+const largeBodyParser = express.json({ limit: '25mb' });
+app.use('/api/v1/products', largeBodyParser);
+app.use('/api/v1/upload', largeBodyParser);
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Static files - serve uploaded images
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
@@ -139,10 +173,15 @@ app.use('/api/v1', (req, res, next) => {
   next();
 });
 
-// API Routes
-if (process.env.NODE_ENV === 'production') {
-  app.use('/api/v1', apiLimiter);
-}
+// API Routes & Rate Limiters
+app.use('/api/v1', apiLimiter);
+app.use('/api/v1/auth/register', strictPublicLimiter);
+app.use('/api/v1/auth/signin', strictPublicLimiter);
+app.use('/api/v1/contact/send', strictPublicLimiter);
+app.use('/api/v1/newsletter/subscribe', strictPublicLimiter);
+app.use('/api/v1/promo-codes/validate', strictPublicLimiter);
+app.use('/api/v1/orders', checkoutLimiter);
+app.use('/api/v1/payment', checkoutLimiter);
 
 app.use('/api/v1/products', productRoutes);
 app.use('/api/v1/categories', categoryRoutes);
@@ -159,12 +198,14 @@ app.use('/api/v1/contact', contactRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-// Start server
-app.listen(PORT, () => {
-  logger.info(`🚀 Server running on port ${PORT}`);
-  logger.info(`📱 Environment: ${process.env.NODE_ENV}`);
-  logger.info(`🔗 Health check: http://localhost:${PORT}/health`);
-});
+// Start server (skip auto-listen when imported by test runner)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    logger.info(`🚀 Server running on port ${PORT}`);
+    logger.info(`📱 Environment: ${process.env.NODE_ENV}`);
+    logger.info(`🔗 Health check: http://localhost:${PORT}/health`);
+  });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

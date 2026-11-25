@@ -1,20 +1,98 @@
 const Order = require('../models/Order');
 const PromoCode = require('../models/PromoCode');
+const Product = require('../models/Product');
 const logger = require('../utils/logger');
+const { auditLog } = require('../utils/auditLogger');
 const { sendOrderConfirmationEmails } = require('../utils/emailService');
+
+const STANDARD_SHIPPING_FEE = Number(process.env.STANDARD_SHIPPING_FEE || 399);
+
+/**
+ * Resolve the authoritative unit price of a product from Firestore.
+ */
+const resolveAuthoritativeUnitPrice = (product) => {
+  const basePrice = Number(product.price);
+  if (!Number.isFinite(basePrice) || basePrice < 0) {
+    throw new Error(`Invalid catalog price for product ${product.id || product.name}`);
+  }
+
+  const explicitDiscounted = product.discountedPrice ?? product.discountPrice;
+  if (explicitDiscounted !== undefined && explicitDiscounted !== null && explicitDiscounted !== '') {
+    const disc = Number(explicitDiscounted);
+    if (Number.isFinite(disc) && disc >= 0 && disc < basePrice) {
+      return Math.round(disc * 100) / 100;
+    }
+  }
+
+  const pct = Number(product.discountPercentage);
+  if (Number.isFinite(pct) && pct > 0 && pct <= 100) {
+    return Math.round(basePrice * (1 - pct / 100) * 100) / 100;
+  }
+
+  return Math.round(basePrice * 100) / 100;
+};
 
 // Create new order
 const createOrder = async (req, res, next) => {
   try {
     const normalizedPaymentMethod = String(req.body.paymentMethod || '').trim().toLowerCase();
-    const subtotalAmount = Number(req.body.subtotalAmount || req.body.totalAmount || 0);
-    const shippingAmount = Number(req.body.shippingAmount || 0);
     const requestedPromoCode = String(req.body.promoCode || '').trim();
+    const rawItems = Array.isArray(req.body.items) ? req.body.items : [];
+
+    // Recompute authoritative line-item prices and subtotal from Firestore product catalog
+    const verifiedItems = [];
+    let computedSubtotal = 0;
+
+    for (const item of rawItems) {
+      const productId = item?.productId;
+      const quantity = Math.floor(Number(item?.quantity));
+
+      if (!productId || !Number.isFinite(quantity) || quantity < 1 || quantity > 100) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid product ID or item quantity'
+        });
+      }
+
+      const catalogProduct = await Product.findById(productId);
+      if (!catalogProduct) {
+        return res.status(400).json({
+          success: false,
+          error: `Product not found: ${productId}`
+        });
+      }
+
+      if (catalogProduct.status === 'outofstock' || catalogProduct.status === 'discontinued') {
+        return res.status(400).json({
+          success: false,
+          error: `Product is currently unavailable: ${catalogProduct.name}`
+        });
+      }
+
+      const authoritativePrice = resolveAuthoritativeUnitPrice(catalogProduct);
+      computedSubtotal += authoritativePrice * quantity;
+
+      verifiedItems.push({
+        productId: catalogProduct.id ?? productId,
+        name: catalogProduct.name || item.name,
+        price: authoritativePrice,
+        quantity,
+        size: item.size || '',
+        color: item.color || '',
+        img: catalogProduct.img || item.img || ''
+      });
+    }
+
+    const subtotalAmount = Math.round(computedSubtotal * 100) / 100;
+    const requestedShipping = Number(req.body.shippingAmount);
+    const shippingAmount = Number.isFinite(requestedShipping) && requestedShipping >= STANDARD_SHIPPING_FEE
+      ? Math.round(requestedShipping * 100) / 100
+      : STANDARD_SHIPPING_FEE;
 
     let promoCode = null;
     let promoCodeId = null;
     let discountAmount = 0;
-    let finalTotalAmount = Number(req.body.totalAmount || 0);
+    let finalTotalAmount = Math.round((subtotalAmount + shippingAmount) * 100) / 100;
 
     if (requestedPromoCode) {
       const promoResult = await PromoCode.validateCode(requestedPromoCode, subtotalAmount);
@@ -28,20 +106,26 @@ const createOrder = async (req, res, next) => {
       promoCode = promoResult.promo.code;
       promoCodeId = promoResult.promo.id;
       discountAmount = Number(promoResult.discountAmount || 0);
-      finalTotalAmount = Math.max(0, Number(promoResult.finalAmount || 0) + shippingAmount);
+      finalTotalAmount = Math.max(0, Math.round((Number(promoResult.finalAmount || 0) + shippingAmount) * 100) / 100);
+
+      // Atomically validate and increment promo code usage via Firestore transaction
+      try {
+        await PromoCode.incrementUsage(promoCodeId);
+      } catch (promoError) {
+        return res.status(400).json({
+          success: false,
+          error: promoError.message || 'Promo code usage limit reached'
+        });
+      }
     }
 
-    if (!requestedPromoCode) {
-      finalTotalAmount = Number(req.body.totalAmount || (subtotalAmount + shippingAmount));
-    }
-
-    logger.info(`Create order request received. paymentMethod(raw='${req.body.paymentMethod || ''}', normalized='${normalizedPaymentMethod || ''}'), userEmail='${req.body.userEmail || ''}'`);
+    logger.info(`Create order request received. paymentMethod(raw='${req.body.paymentMethod || ''}', normalized='${normalizedPaymentMethod || ''}'), userEmail='${req.body.userEmail || ''}', serverTotal=${finalTotalAmount}`);
 
     const orderData = {
-      userId: req.user?.uid || null, // From auth middleware (optional for guest checkout)
+      userId: req.user?.uid || null, // From optionalAuth middleware (null for guest checkout)
       userEmail: req.body.userEmail,
       userName: req.body.userName,
-      items: req.body.items,
+      items: verifiedItems,
       subtotalAmount,
       shippingAmount,
       discountAmount,
@@ -55,12 +139,6 @@ const createOrder = async (req, res, next) => {
     };
 
     const order = await Order.create(orderData);
-
-    if (promoCodeId) {
-      PromoCode.incrementUsage(promoCodeId).catch((promoError) => {
-        logger.error(`Failed to increment promo usage for promo ${promoCodeId}:`, promoError);
-      });
-    }
 
     // If order is Cash on Delivery, send confirmation email immediately
     if (normalizedPaymentMethod === 'cod' || normalizedPaymentMethod === 'cash_on_delivery') {
@@ -210,6 +288,13 @@ const updatePaymentStatus = async (req, res, next) => {
 
     const order = await Order.updatePaymentStatus(orderId, normalizedStatus);
 
+    auditLog('ORDER_PAYMENT_STATUS_UPDATED', {
+      actor: req.user,
+      ip: req.ip,
+      target: orderId,
+      details: { status: normalizedStatus }
+    });
+
     if (normalizedStatus === 'paid' || normalizedStatus === 'completed') {
       try {
         const effectiveOrderId = order?.orderId || orderId;
@@ -251,6 +336,7 @@ const deleteOrder = async (req, res, next) => {
   try {
     const { orderId } = req.params;
     await Order.delete(orderId);
+    auditLog('ORDER_DELETED', { actor: req.user, ip: req.ip, target: orderId });
 
     res.status(200).json({
       success: true,
