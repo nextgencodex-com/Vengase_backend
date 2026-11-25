@@ -39,6 +39,13 @@ const sendWithFallbackFrom = async (payload, primaryFrom, fallbackFrom) => {
   return { result: fallbackResult, usedFrom: fallbackFrom, usedFallback: true };
 };
 
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 const sendContactEmail = async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
@@ -51,6 +58,13 @@ const sendContactEmail = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'All fields are required'
+      });
+    }
+
+    if (name.length > 100 || email.length > 254 || subject.length > 200 || message.length > 5000) {
+      return res.status(400).json({
+        success: false,
+        error: 'One or more fields exceed the maximum allowed length'
       });
     }
 
@@ -96,11 +110,16 @@ const sendContactEmail = async (req, res, next) => {
       });
     }
 
+    const safeName = escapeHtml(name);
+    const safeEmail = escapeHtml(email);
+    const safeSubject = escapeHtml(subject);
+    const safeMessage = escapeHtml(message);
+
     // Send email to admin first (critical path)
     const adminSend = await sendWithFallbackFrom({
       to: adminEmail,
       reply_to: email,
-      subject: `New Contact Form Submission: ${subject}`,
+      subject: `New Contact Form Submission: ${subject.replace(/[\r\n]+/g, ' ')}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; border-radius: 8px;">
           <div style="background-color: #000; color: #fff; padding: 20px; border-radius: 8px 8px 0 0; text-align: center;">
@@ -110,23 +129,23 @@ const sendContactEmail = async (req, res, next) => {
           <div style="background-color: #fff; padding: 20px; border-radius: 0 0 8px 8px;">
             <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee;">
               <p style="margin: 0 0 10px 0; color: #666; font-size: 12px; text-transform: uppercase;">From</p>
-              <p style="margin: 0; font-size: 16px; font-weight: bold; color: #000;">${name}</p>
-              <p style="margin: 5px 0 0 0; color: #0066cc; font-size: 14px;">${email}</p>
+              <p style="margin: 0; font-size: 16px; font-weight: bold; color: #000;">${safeName}</p>
+              <p style="margin: 5px 0 0 0; color: #0066cc; font-size: 14px;">${safeEmail}</p>
             </div>
 
             <div style="margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee;">
               <p style="margin: 0 0 10px 0; color: #666; font-size: 12px; text-transform: uppercase;">Subject</p>
-              <p style="margin: 0; font-size: 16px; font-weight: bold; color: #000;">${subject}</p>
+              <p style="margin: 0; font-size: 16px; font-weight: bold; color: #000;">${safeSubject}</p>
             </div>
 
             <div style="margin-bottom: 20px;">
               <p style="margin: 0 0 10px 0; color: #666; font-size: 12px; text-transform: uppercase;">Message</p>
-              <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${message}</p>
+              <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">${safeMessage}</p>
             </div>
 
             <div style="background-color: #f0f0f0; padding: 15px; border-radius: 5px; margin-top: 20px;">
               <p style="margin: 0; font-size: 12px; color: #666;">
-                <strong>Reply to:</strong> ${email}<br>
+                <strong>Reply to:</strong> ${safeEmail}<br>
                 <strong>Date:</strong> ${new Date().toLocaleString()}<br>
                 <strong>Source:</strong> Contact Form - VENGASE
               </p>

@@ -78,10 +78,22 @@ class ImageService {
     try {
       await this.ensureImageDirectory();
 
+      // Derive file extension strictly from verified MIME type (never trust client filename extension)
+      const mimeToExt = {
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/png': '.png',
+        'image/webp': '.webp',
+        'image/gif': '.gif'
+      };
+      const extension = mimeToExt[String(file.mimetype || '').toLowerCase()];
+      if (!extension) {
+        throw new Error('Unsupported image MIME type');
+      }
+
       // Generate unique filename
       const timestamp = Date.now();
       const random = crypto.randomBytes(4).toString('hex');
-      const extension = path.extname(file.originalname);
       const filename = `product_${timestamp}_${random}${extension}`;
       
       const filePath = path.join(this.imageDir, filename);
@@ -101,9 +113,17 @@ class ImageService {
 
   async deleteImage(imageUrl) {
     try {
-      // Extract filename from URL path
-      const filename = path.basename(imageUrl);
-      const filePath = path.join(this.imageDir, filename);
+      // Extract filename and strictly validate against path traversal
+      const filename = path.basename(String(imageUrl || ''));
+      if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes('..')) {
+        throw new Error('Invalid image filename');
+      }
+
+      const resolvedBase = path.resolve(this.imageDir);
+      const filePath = path.resolve(this.imageDir, filename);
+      if (!filePath.startsWith(resolvedBase + path.sep)) {
+        throw new Error('Invalid image path');
+      }
       
       // Check if file exists before deleting
       try {
@@ -116,7 +136,7 @@ class ImageService {
         throw new Error('Image file not found');
       }
     } catch (error) {
-      if (error.message === 'Image file not found') {
+      if (error.message === 'Image file not found' || error.message === 'Invalid image filename' || error.message === 'Invalid image path') {
         throw error;
       }
       logger.error('Error deleting image:', error);

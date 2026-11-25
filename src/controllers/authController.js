@@ -42,15 +42,17 @@ const listAllAuthUsers = async () => {
 
 // @desc    Register new user (create profile after Firebase auth)
 // @route   POST /api/v1/auth/register
-// @access  Public
+// @access  Private (Firebase ID Token required)
 const registerUser = async (req, res, next) => {
   try {
-    const { uid, email, firstName, lastName, displayName, phone } = req.body;
+    const uid = req.user?.uid;
+    const email = req.user?.email || req.body?.email;
+    const { firstName, lastName, displayName, phone } = req.body;
 
     if (!uid || !email) {
       return res.status(400).json({
         success: false,
-        error: 'UID and email are required'
+        error: 'Authenticated UID and email are required'
       });
     }
 
@@ -97,15 +99,17 @@ const registerUser = async (req, res, next) => {
 
 // @desc    Sign in user (check if profile exists, create if not)
 // @route   POST /api/v1/auth/signin
-// @access  Public  
+// @access  Private (Firebase ID Token required)
 const signInUser = async (req, res, next) => {
   try {
-    const { uid, email, displayName } = req.body;
+    const uid = req.user?.uid;
+    const email = req.user?.email || req.body?.email;
+    const { displayName, firstName, lastName, phone } = req.body;
 
     if (!uid || !email) {
       return res.status(400).json({
         success: false,
-        error: 'UID and email are required'
+        error: 'Authenticated UID and email are required'
       });
     }
 
@@ -117,10 +121,10 @@ const signInUser = async (req, res, next) => {
       const userData = {
         uid,
         email,
-        displayName: displayName || email.split('@')[0],
-        firstName: '',
-        lastName: '',
-        phone: ''
+        displayName: displayName || req.user?.name || email.split('@')[0],
+        firstName: firstName || '',
+        lastName: lastName || '',
+        phone: phone || ''
       };
       
       user = await User.create(userData);

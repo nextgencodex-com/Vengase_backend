@@ -104,12 +104,22 @@ const exportSubscriptions = async (req, res, next) => {
       return res.status(400).json({ error: 'No subscriptions to export' });
     }
 
-    // Create CSV content
+    // Create CSV content with CSV formula injection protection
+    const sanitizeCsvCell = (val) => {
+      const str = String(val ?? '');
+      const neutralized = /^[=+\-@\t\r]/.test(str) ? `'${str}` : str;
+      return `"${neutralized.replace(/"/g, '""')}"`;
+    };
+
     const headers = ['Email', 'Subscribed Date', 'Status'];
     const csvContent = [
       headers.join(','),
       ...subscriptions.map(sub =>
-        `"${sub.Email}","${sub['Subscribed Date']}","${sub.Status}"`
+        [
+          sanitizeCsvCell(sub.Email),
+          sanitizeCsvCell(sub['Subscribed Date']),
+          sanitizeCsvCell(sub.Status)
+        ].join(',')
       )
     ].join('\n');
 

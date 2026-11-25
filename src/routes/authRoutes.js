@@ -20,9 +20,9 @@ const { validateCreateAdmin } = require('../validators/authValidator');
 
 const router = express.Router();
 
-// Public routes
-router.post('/register', registerUser);
-router.post('/signin', signInUser);
+// Authenticated user bootstrap / profile routes (require valid Firebase ID token)
+router.post('/register', authenticateToken, registerUser);
+router.post('/signin', authenticateToken, signInUser);
 
 // Protected user routes
 router.get('/profile', authenticateToken, getProfile);

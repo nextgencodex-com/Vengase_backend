@@ -9,13 +9,12 @@ const {
 } = require('../controllers/adminController');
 
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { validateCreateAdmin } = require('../validators/authValidator');
 
 const router = express.Router();
 
-// Public route for initial admin creation
-router.post('/create-admin', createAdmin);
-
 // Protected routes (Admin only)
+router.post('/create-admin', authenticateToken, requireAdmin, validateCreateAdmin, createAdmin);
 router.post('/make-admin', authenticateToken, requireAdmin, makeAdmin);
 router.get('/list', authenticateToken, requireAdmin, listAdmins);
 router.post('/remove-admin', authenticateToken, requireAdmin, removeAdmin);

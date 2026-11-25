@@ -31,9 +31,15 @@ const errorHandler = (err, req, res, next) => {
     error.message = 'Firebase operation failed - Index may be required';
   }
 
-  res.status(error.statusCode || 500).json({
+  const statusCode = error.statusCode || (res.statusCode && res.statusCode !== 200 ? res.statusCode : 500);
+  const isProd = process.env.NODE_ENV === 'production';
+  const safeMessage = (statusCode >= 500 && isProd)
+    ? 'Internal server error'
+    : (error.message || 'Server Error');
+
+  res.status(statusCode).json({
     success: false,
-    error: error.message || 'Server Error',
+    error: safeMessage,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 };
