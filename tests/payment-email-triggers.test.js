@@ -1,5 +1,5 @@
 jest.mock('../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
-jest.mock('../src/models/Order', () => ({ create: jest.fn(), findById: jest.fn(), updatePaymentStatus: jest.fn(), updateOrderStatus: jest.fn() }));
+jest.mock('../src/models/Order', () => ({ create: jest.fn(), findById: jest.fn(), updatePaymentStatus: jest.fn(), updateOrderStatus: jest.fn(), markPaymentPaid: jest.fn(), markPaymentFailed: jest.fn(), flagPaymentReview: jest.fn() }));
 jest.mock('../src/models/PromoCode', () => ({}));
 jest.mock('../src/utils/emailService', () => ({ sendOrderConfirmationEmails: jest.fn() }));
 jest.mock('axios', () => ({ get: jest.fn() }));
@@ -19,7 +19,7 @@ const response = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn().mo
 beforeEach(() => {
   jest.clearAllMocks();
   Order.create.mockImplementation(async data => ({ ...data, orderId: 'ORD-1', paymentStatus: 'pending' }));
-  Order.findById.mockResolvedValue({ orderId: 'ORD-1', paymentMeta: { mintpay_purchase_id: 'PURCHASE-1' } });
+  Order.findById.mockResolvedValue({ orderId: 'ORD-1', totalAmount: 1000, paymentMeta: { mintpay_purchase_id: 'PURCHASE-1' } });
 });
 test.each(['cod', 'cash_on_delivery', ' COD '])('%s sends confirmations immediately after saving the order, without payment', async paymentMethod => {
   const res = response();
@@ -46,8 +46,8 @@ test.each([['00', true], ['05', false]])('WebXPay encrypted result %s triggers e
   const payment = crypto.privateEncrypt({ key: keys.privateKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from(`ORD-1|REF|2026-09-19|${code}|Result|card`)).toString('base64');
   await payments.paymentCallback({ body: { payment, secret_key: 'test-webx' } }, response());
   expect(sendOrderConfirmationEmails).toHaveBeenCalledTimes(paid ? 1 : 0);
-  expect(Order.updatePaymentStatus).toHaveBeenCalledWith('ORD-1', paid ? 'paid' : 'failed');
-  if (paid) expect(Order.updatePaymentStatus.mock.invocationCallOrder[0]).toBeLessThan(sendOrderConfirmationEmails.mock.invocationCallOrder[0]);
+  expect(paid ? Order.markPaymentPaid : Order.markPaymentFailed).toHaveBeenCalledWith('ORD-1');
+  if (paid) expect(Order.markPaymentPaid.mock.invocationCallOrder[0]).toBeLessThan(sendOrderConfirmationEmails.mock.invocationCallOrder[0]);
 });
 test('WebXPay failed result with a not-approved comment must not send confirmation', async () => {
   await payments.paymentCallback({ body: { order_id: 'ORD-1', status_code: '05', comment: 'Payment not approved', secret_key: 'test-webx' } }, response());
@@ -74,16 +74,44 @@ test.each([['00', true], ['05', false]])('Payzy signed result %s triggers emails
   await payments.verifyPayzyPayment({ body: { x_order_id: 'ORD-1', response_code: code, signature } }, res);
   expect(res.status).toHaveBeenCalledWith(200);
   expect(sendOrderConfirmationEmails).toHaveBeenCalledTimes(paid ? 1 : 0);
-  expect(Order.updatePaymentStatus).toHaveBeenCalledWith('ORD-1', paid ? 'paid' : 'failed');
+  expect(paid ? Order.markPaymentPaid : Order.markPaymentFailed).toHaveBeenCalledWith('ORD-1');
 });
 test('Payzy invalid signature does not send emails', async () => {
   Order.findById.mockResolvedValue({ orderId: 'ORD-1', paymentMeta: {} });
   await payments.verifyPayzyPayment({ body: { x_order_id: 'ORD-1', response_code: '00', signature: 'invalid' } }, response());
   expect(sendOrderConfirmationEmails).not.toHaveBeenCalled();
 });
-test.each([['approved', true], ['declined', false], ['pending', false]])('Mintpay status %s triggers emails only for approval', async (status, paid) => {
-  axios.get.mockResolvedValue({ data: { data: { status } } });
-  await payments.verifyMintpayPayment({ body: { order_id: 'ORD-1' } }, response());
-  expect(sendOrderConfirmationEmails).toHaveBeenCalledTimes(paid ? 1 : 0);
-  if (paid) expect(Order.updatePaymentStatus).toHaveBeenCalledWith('ORD-1', 'paid');
+test.each([['Approved', 'paid'], ['Rejected', 'pending'], ['declined', 'pending'], ['pending', 'pending']])('Mintpay status %s -> %s, emails only for approval, never marks failed', async (status, expected) => {
+  axios.get.mockResolvedValue({ status: 200, data: { data: { status, total_price: '1000.0000' } } });
+  const res = response();
+  await payments.verifyMintpayPayment({ body: { order_id: 'ORD-1' } }, res);
+  expect(sendOrderConfirmationEmails).toHaveBeenCalledTimes(expected === 'paid' ? 1 : 0);
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ payment_status: expected }));
+  expect(Order.markPaymentPaid).toHaveBeenCalledTimes(expected === 'paid' ? 1 : 0);
+  expect(Order.markPaymentFailed).not.toHaveBeenCalled();
+  expect(axios.get).toHaveBeenCalledWith(expect.stringMatching(/status-purchase\/$/), expect.objectContaining({ params: expect.objectContaining({ purchase_id: 'PURCHASE-1' }) }));
+});
+test.each([['999.00'], [undefined]])('Mintpay approved with wrong/missing amount %s is flagged for review, not paid', async (total_price) => {
+  axios.get.mockResolvedValue({ status: 200, data: { data: { status: 'Approved', total_price } } });
+  const res = response();
+  await payments.verifyMintpayPayment({ body: { order_id: 'ORD-1' } }, res);
+  expect(Order.markPaymentPaid).not.toHaveBeenCalled();
+  expect(sendOrderConfirmationEmails).not.toHaveBeenCalled();
+  expect(Order.flagPaymentReview).toHaveBeenCalledWith('ORD-1', expect.any(String));
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ payment_status: 'pending', review_required: true }));
+});
+test('Mintpay rejects a client purchase_id that does not match the stored one', async () => {
+  const res = response();
+  await payments.verifyMintpayPayment({ body: { order_id: 'ORD-1', purchase_id: 'OTHER-PAID-PURCHASE' } }, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(axios.get).not.toHaveBeenCalled();
+  expect(Order.markPaymentPaid).not.toHaveBeenCalled();
+});
+test('Mintpay on an already-paid order resends missing emails without calling the gateway', async () => {
+  Order.findById.mockResolvedValue({ orderId: 'ORD-1', paymentStatus: 'paid', paymentMeta: { mintpay_purchase_id: 'PURCHASE-1' } });
+  const res = response();
+  await payments.verifyMintpayPayment({ body: { order_id: 'ORD-1' } }, res);
+  expect(axios.get).not.toHaveBeenCalled();
+  expect(sendOrderConfirmationEmails).toHaveBeenCalledWith('ORD-1');
+  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ payment_status: 'paid' }));
 });

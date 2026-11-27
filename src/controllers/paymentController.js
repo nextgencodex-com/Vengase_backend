@@ -264,8 +264,7 @@ exports.paymentCallback = async (req, res, next) => {
             const isSuccess = ['0', '00', '1', 'ok', 'success', 'approved', 'paid'].includes(normalizedStatus);
 
             if (isSuccess) {
-                await Order.updatePaymentStatus(orderId, 'paid');
-                await Order.updateOrderStatus(orderId, 'confirmed');
+                await Order.markPaymentPaid(orderId);
                 logger.info(`Order ${orderId} payment marked as PAID and CONFIRMED`);
                 redirectResult = 'success';
                 
@@ -276,7 +275,7 @@ exports.paymentCallback = async (req, res, next) => {
                     logger.error(err);
                 }
             } else {
-                await Order.updatePaymentStatus(orderId, 'failed');
+                await Order.markPaymentFailed(orderId);
                 logger.info(`Order ${orderId} payment marked as FAILED (statusCode=${statusCode})`);
                 redirectResult = 'failed';
             }
@@ -539,8 +538,7 @@ exports.verifyPayzyPayment = async (req, res, next) => {
             const isSuccess = rawCode === '00' || rawCode === '0' || rawCode === 'success' || rawCode === 'approved';
 
             if (isSuccess) {
-                await Order.updatePaymentStatus(effectiveOrderId, 'paid');
-                await Order.updateOrderStatus(effectiveOrderId, 'confirmed');
+                await Order.markPaymentPaid(effectiveOrderId);
                 logger.info(`Payzy Order ${effectiveOrderId} payment marked as PAID and CONFIRMED`);
                 
                 // Send confirmation email to customer and admin
@@ -552,7 +550,7 @@ exports.verifyPayzyPayment = async (req, res, next) => {
                 
                 return res.status(200).json({ success: true, payment_status: 'paid' });
             } else {
-                await Order.updatePaymentStatus(effectiveOrderId, 'failed');
+                await Order.markPaymentFailed(effectiveOrderId);
                 logger.info(`Payzy Order ${effectiveOrderId} payment failed with code ${response_code}`);
                 return res.status(200).json({ success: true, payment_status: 'failed' });
             }
@@ -797,84 +795,91 @@ exports.generateMintpayPayload = async (req, res, next) => {
     }
 };
 
+const MINTPAY_STORED_PURCHASE_ID = (order) => String(order?.paymentMeta?.mintpay_purchase_id || order?.paymentMeta?.purchase_id || '').trim();
+
+/**
+ * Checks one order against Mintpay's status API and settles it.
+ * Mintpay has no webhook, so this runs on browser return AND from the background reconciler.
+ * Rules match Mintpay's official plugin: only "Approved" is paid ("Rejected" is also
+ * returned for still-pending purchases), and data.total_price must match the order within 0.01.
+ * Never marks an order failed: anything not approved stays pending for the next check.
+ */
+const reconcileMintpayOrder = async (order) => {
+    const effectiveOrderId = order.orderId;
+    if (['paid', 'completed'].includes(order.paymentStatus)) {
+        const emails = await sendOrderConfirmationEmails(effectiveOrderId);
+        return { payment_status: 'paid', ...(emails?.success === false ? { emails_pending: true } : {}) };
+    }
+    if (order.paymentStatus === 'refunded') return { payment_status: 'refunded' };
+
+    const config = getMintpayConfig();
+    if (!config.merchantId || !config.apiToken) {
+        throw new Error('Mintpay is not configured (MINTPAY_MERCHANT_ID / MINTPAY_API_TOKEN)');
+    }
+    const purchaseId = MINTPAY_STORED_PURCHASE_ID(order);
+    if (!purchaseId) return { payment_status: 'pending', reason: 'no_purchase_recorded' };
+
+    const axios = require('axios');
+    // Trailing slash is required: the slash-less path 301-redirects.
+    const statusResponse = await axios.get(`${config.baseUrl}/api/v2/purchase/merchant-gateway/status-purchase/`, {
+        params: { merchant_id: config.merchantId, purchase_id: purchaseId },
+        headers: { 'Authorization': `Token ${config.apiToken}`, 'Content-Type': 'application/json' },
+        timeout: 20000,
+        validateStatus: (code) => (code >= 200 && code < 300) || code === 404
+    });
+
+    const data = statusResponse?.data?.data || {};
+    const status = typeof data.status === 'string' ? data.status.trim() : '';
+    logger.info(`[Mintpay] Status for order ${effectiveOrderId} (purchase ${purchaseId}): ${status || 'none'} (http ${statusResponse?.status})`);
+
+    if (status.toLowerCase() !== 'approved') return { payment_status: 'pending' };
+
+    const paidAmount = Number(data.total_price);
+    const expectedAmount = Number(order.totalAmount);
+    if (!Number.isFinite(paidAmount) || !Number.isFinite(expectedAmount) || Math.abs(paidAmount - expectedAmount) > 0.01) {
+        const reason = `Mintpay approved ${Number.isFinite(paidAmount) ? paidAmount.toFixed(2) : 'unknown amount'} but order total is ${Number.isFinite(expectedAmount) ? expectedAmount.toFixed(2) : 'unknown'}`;
+        logger.warn(`[Mintpay] Order ${effectiveOrderId} needs manual review: ${reason}`);
+        await Order.flagPaymentReview(effectiveOrderId, reason);
+        return { payment_status: 'pending', review_required: true };
+    }
+
+    await Order.markPaymentPaid(effectiveOrderId);
+    logger.info(`Mintpay Order ${effectiveOrderId} payment marked as PAID and CONFIRMED`);
+    let emails = null;
+    try {
+        emails = await sendOrderConfirmationEmails(effectiveOrderId);
+    } catch (err) {
+        logger.error('[Mintpay] Error sending confirmation email:', err);
+    }
+    return { payment_status: 'paid', ...(emails?.success === false ? { emails_pending: true } : {}) };
+};
+exports.reconcileMintpayOrder = reconcileMintpayOrder;
+
 exports.verifyMintpayPayment = async (req, res, next) => {
     try {
         const payload = { ...req.query, ...req.body };
-        const rawOrderId = payload.order_id || payload.orderId || payload.x_order_id;
-        const normalizedOrderId = normalizeOrderId(rawOrderId);
-        let resolvedPurchaseId = payload.purchase_id || payload.purchaseId || payload.id;
-        const config = getMintpayConfig();
+        const normalizedOrderId = normalizeOrderId(payload.order_id || payload.orderId || payload.x_order_id);
+        const clientPurchaseId = String(payload.purchase_id || payload.purchaseId || payload.id || '').trim();
 
-        if (!config.merchantId || !config.apiToken) {
-            logger.error('Mintpay config missing for verification: MINTPAY_MERCHANT_ID and MINTPAY_API_TOKEN must be configured in .env');
-            return res.status(500).json({ success: false, error: 'Mintpay payment gateway is not properly configured on server.' });
+        if (!normalizedOrderId) {
+            return res.status(400).json({ success: false, error: 'Missing order_id for Mintpay verification' });
+        }
+        const order = await Order.findById(normalizedOrderId);
+        if (!order) {
+            return res.status(404).json({ success: false, error: 'Order not found' });
+        }
+        // Only trust the purchase saved at checkout; a client-supplied id could belong to another paid order.
+        const storedPurchaseId = MINTPAY_STORED_PURCHASE_ID(order);
+        if (!storedPurchaseId) {
+            return res.status(400).json({ success: false, error: 'No Mintpay purchase recorded for this order' });
+        }
+        if (clientPurchaseId && clientPurchaseId !== storedPurchaseId) {
+            logger.warn(`[Mintpay] purchase_id mismatch for order ${normalizedOrderId}`);
+            return res.status(400).json({ success: false, error: 'Purchase does not match this order' });
         }
 
-        let order = null;
-        if (normalizedOrderId) {
-            order = await Order.findById(normalizedOrderId);
-            if (order && !resolvedPurchaseId) {
-                resolvedPurchaseId = order.paymentMeta?.mintpay_purchase_id || order.paymentMeta?.purchase_id;
-            }
-        }
-
-        if (!resolvedPurchaseId) {
-            return res.status(400).json({ success: false, error: 'Missing purchase_id for Mintpay verification' });
-        }
-
-        const effectiveOrderId = order?.orderId || normalizedOrderId;
-        logger.info(`[Mintpay] Verifying payment for order ${effectiveOrderId}, purchaseId: ${resolvedPurchaseId}`);
-
-        const axios = require('axios');
-        const statusResponse = await axios.get(`${config.baseUrl}/api/v2/purchase/merchant-gateway/status-purchase`, {
-            params: {
-                merchant_id: config.merchantId,
-                purchase_id: resolvedPurchaseId
-            },
-            headers: {
-                'Authorization': `Token ${config.apiToken}`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 20000
-        });
-
-        const statusData = statusResponse?.data;
-        const paymentStatusResult = String(statusData?.data?.status || statusData?.status || '').trim();
-        logger.info(`[Mintpay] Status response for purchase ${resolvedPurchaseId}: status=${paymentStatusResult}`, statusData);
-
-        const isApproved = ['approved', 'success', 'successful', 'paid', 'completed'].includes(paymentStatusResult.toLowerCase());
-
-        if (isApproved) {
-            if (effectiveOrderId) {
-                await Order.updatePaymentStatus(effectiveOrderId, 'paid');
-                await Order.updateOrderStatus(effectiveOrderId, 'confirmed');
-                logger.info(`Mintpay Order ${effectiveOrderId} payment marked as PAID and CONFIRMED`);
-
-                // Send confirmation email to customer and admin
-                try {
-                    await sendOrderConfirmationEmails(effectiveOrderId);
-                } catch (err) {
-                    logger.error('[Mintpay] Error sending confirmation email:', err);
-                }
-            }
-
-            return res.status(200).json({
-                success: true,
-                payment_status: 'paid',
-                data: statusData?.data || statusData
-            });
-        } else {
-            if (effectiveOrderId) {
-                await Order.updatePaymentStatus(effectiveOrderId, 'failed');
-                logger.info(`Mintpay Order ${effectiveOrderId} payment marked as FAILED (status=${paymentStatusResult})`);
-            }
-
-            return res.status(200).json({
-                success: true,
-                payment_status: 'failed',
-                data: statusData?.data || statusData
-            });
-        }
+        const result = await reconcileMintpayOrder({ ...order, orderId: order.orderId || normalizedOrderId });
+        return res.status(200).json({ success: true, ...result });
     } catch (error) {
         logger.error('[Mintpay] Error in verifyMintpayPayment:', {
             message: error?.message,

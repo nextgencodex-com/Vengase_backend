@@ -204,6 +204,7 @@ if (require.main === module) {
     logger.info(`🚀 Server running on port ${PORT}`);
     logger.info(`📱 Environment: ${process.env.NODE_ENV}`);
     logger.info(`🔗 Health check: http://localhost:${PORT}/health`);
+    require('./src/services/mintpayReconciler').startMintpayReconciler();
   });
 }
 

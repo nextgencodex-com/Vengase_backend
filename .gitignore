@@ -1,4 +1,7 @@
 # Environment files
+.env
+.env.*
+!.env.example
 
 # Dependency directories
 node_modules/
@@ -97,6 +100,7 @@ Thumbs.db
 
 # Firebase
 config/serviceAccountKey.json
+*serviceAccountKey*.json
 
 # Uploads
 public/uploads/*

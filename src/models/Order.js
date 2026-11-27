@@ -284,6 +284,52 @@ class Order {
     });
   }
 
+  async _resolveRef(orderId) {
+    const db = getFirestore();
+    const ref = db.collection(this.collection).doc(orderId);
+    if ((await ref.get()).exists) return ref;
+    const snapshot = await db.collection(this.collection).where('orderId', '==', orderId).limit(1).get();
+    if (snapshot.empty) throw new Error('Order not found');
+    return snapshot.docs[0].ref;
+  }
+
+  // Idempotent: repeat callbacks never reset a shipped/delivered/cancelled order.
+  async markPaymentPaid(orderId) {
+    const db = getFirestore();
+    const ref = await this._resolveRef(orderId);
+    await db.runTransaction(async (transaction) => {
+      const order = (await transaction.get(ref)).data();
+      if (!order || ['paid', 'completed', 'refunded'].includes(order.paymentStatus)) return;
+      transaction.update(ref, {
+        paymentStatus: 'paid',
+        orderStatus: !order.orderStatus || order.orderStatus === 'pending' ? 'confirmed' : order.orderStatus,
+        updatedAt: new Date()
+      });
+    });
+    logger.info(`Order ${orderId} payment marked as paid`);
+  }
+
+  // A late or replayed failure must never downgrade a paid order.
+  async markPaymentFailed(orderId) {
+    const db = getFirestore();
+    const ref = await this._resolveRef(orderId);
+    await db.runTransaction(async (transaction) => {
+      const order = (await transaction.get(ref)).data();
+      if (!order || ['paid', 'completed', 'refunded'].includes(order.paymentStatus)) return;
+      transaction.update(ref, { paymentStatus: 'failed', updatedAt: new Date() });
+    });
+  }
+
+  // Shown to admin; also stops the reconciler from re-checking this order.
+  async flagPaymentReview(orderId, reason) {
+    const ref = await this._resolveRef(orderId);
+    await ref.update({
+      paymentReviewRequired: true,
+      paymentReviewReason: reason,
+      updatedAt: new Date()
+    });
+  }
+
   async getStats() {
     try {
       const db = getFirestore();
